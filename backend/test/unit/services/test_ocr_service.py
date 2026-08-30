@@ -74,6 +74,29 @@ async def test_deepseek_uses_provider_credentials_without_chat_models(db_session
 
 
 @pytest.mark.asyncio
+async def test_deepseek_vision_uses_official_provider_credentials(db_session):
+    provider = ModelProvider(
+        provider_id="deepseek",
+        display_name="DeepSeek",
+        provider_type="openai",
+        base_url="https://api.deepseek.example",
+        is_enabled=True,
+        api_key="deepseek-secret",
+        api_key_env=None,
+        enabled_models=[],
+    )
+    db_session.add(provider)
+    await db_session.flush()
+
+    resolved = await ocr_service.resolve_ocr_task_params({"ocr_engine": "deepseek_vision"}, db_session)
+
+    assert resolved["_ocr_processor_kwargs"] == {
+        "api_key": "deepseek-secret",
+        "api_url": "https://api.deepseek.example/chat/completions",
+    }
+
+
+@pytest.mark.asyncio
 async def test_health_checks_every_registered_ocr_method(db_session, monkeypatch):
     async def build_kwargs(db, engine_id):
         del db

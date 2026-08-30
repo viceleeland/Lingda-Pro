@@ -18,7 +18,7 @@ export const brandIcons = {
 export const getKbTypeLabel = (type) => {
   const normalized = String(type || '').toLowerCase()
   const labels = {
-    milvus: 'Yuxi',
+    milvus: '向量知识库',
     dify: 'Dify',
     notion: 'Notion'
   }
@@ -44,6 +44,18 @@ export const getKbTypeColor = (type) => {
 }
 
 const READ_ONLY_KB_TYPES = new Set(['dify', 'notion'])
+const KB_IMAGE_PROXY_PATH_RE = /^\/api\/knowledge\/databases\/[^/]+\/images\/.+$/
+
+export const isAuthenticatedKbImageUrl = (src, currentOrigin = globalThis.location?.origin) => {
+  if (!src || !currentOrigin) return false
+
+  try {
+    const url = new URL(src, currentOrigin)
+    return url.origin === currentOrigin && KB_IMAGE_PROXY_PATH_RE.test(url.pathname)
+  } catch {
+    return false
+  }
+}
 
 export const isReadOnlyDatabase = (database, kbTypes = {}) => {
   const kbType = (
@@ -63,5 +75,6 @@ export const kbUtils = {
   getKbTypeLabel,
   getKbTypeIcon,
   getKbTypeColor,
-  isReadOnlyDatabase
+  isReadOnlyDatabase,
+  isAuthenticatedKbImageUrl
 }

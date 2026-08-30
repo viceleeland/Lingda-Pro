@@ -1,3 +1,4 @@
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +7,7 @@ from fastapi import HTTPException
 from server.routers import knowledge_router
 from server.utils.knowledge_response import serialize_knowledge_base
 from yuxi.knowledge.read_models import KnowledgeBaseSummary
+from yuxi.permissions import ResourcePermission
 
 
 def test_serialize_knowledge_base_redacts_credentials_from_compatibility_fields():
@@ -29,6 +31,34 @@ def test_serialize_knowledge_base_redacts_credentials_from_compatibility_fields(
     assert response["metadata"]["chunk_size"] == 100
     assert "dify_token" not in response["additional_params"]
     assert "dify_token" not in response["metadata"]
+
+
+def test_kb_image_route_authenticates_any_signed_in_user_before_resource_acl():
+    dependency = inspect.signature(knowledge_router.get_kb_image).parameters["current_user"].default
+
+    assert dependency.dependency is knowledge_router.get_required_user
+
+
+@pytest.mark.asyncio
+async def test_kb_image_route_checks_read_scope_before_accessing_storage(monkeypatch):
+    user = SimpleNamespace(uid="out-of-scope", role="user", department_id=2)
+    checked = {}
+
+    async def deny_read(kb_id, current_user, required):
+        checked.update(kb_id=kb_id, current_user=current_user, required=required)
+        raise HTTPException(status_code=403, detail="无权操作该知识库")
+
+    def fail_storage_access():
+        raise AssertionError("permission denial must happen before storage access")
+
+    monkeypatch.setattr(knowledge_router, "_ensure_database_permission", deny_read)
+    monkeypatch.setattr(knowledge_router, "get_minio_client", fail_storage_access)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await knowledge_router.get_kb_image("kb-1", "kb-images/page.png", current_user=user)
+
+    assert exc_info.value.status_code == 403
+    assert checked == {"kb_id": "kb-1", "current_user": user, "required": ResourcePermission.READ}
 
 
 @pytest.mark.parametrize(("uid", "role", "can_read"), [("admin-1", "admin", True), ("other-user", "user", False)])

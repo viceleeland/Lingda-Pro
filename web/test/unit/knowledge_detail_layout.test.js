@@ -88,6 +88,35 @@ test('检索面板强制挂载以保留上传后的示例问题生成', () => {
   assert.match(layoutSource, /:force-render="tab\.forceRender === true"/)
 })
 
+test('检索结果使用 MarkdownPreview 展示知识库图片', () => {
+  const source = readSource('../../src/components/QuerySection.vue')
+
+  assert.match(source, /<MarkdownPreview :content="chunk\.content \|\| ''" class="result-content"/)
+  assert.match(
+    source,
+    /import MarkdownPreview from '@\/components\/common\/MarkdownPreview\.vue'/
+  )
+  assert.doesNotMatch(source, /\{\{\s*chunk\.content\s*\}\}/)
+})
+
+test('图谱构建完成后自动刷新当前知识库画布', () => {
+  const source = readSource('../../src/components/KnowledgeGraphSection.vue')
+  const startBuildSource = source.slice(
+    source.indexOf('const startGraphBuild = async'),
+    source.indexOf('const retryGraphVectors = async')
+  )
+
+  assert.match(source, /watch\(\s*isBuildActive,\s*\(active, wasActive\) =>/)
+  assert.match(
+    source,
+    /wasActive && graphBuildStatus\.value\?\.build_task_status === 'completed'[\s\S]*?scheduleGraphLoad\(0\)/
+  )
+  assert.match(
+    startBuildSource,
+    /graphBuildStatus\.value = \{[\s\S]*?build_task_status: 'pending'[\s\S]*?await loadGraphBuildStatus\(\)/
+  )
+})
+
 test('思维导图弹窗销毁时取消延迟渲染任务和迟到错误反馈', () => {
   const source = readSource('../../src/components/MindMapSection.vue')
 

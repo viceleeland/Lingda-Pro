@@ -4,6 +4,7 @@ import os
 import re
 from abc import ABC, abstractmethod
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from yuxi.knowledge.chunking.ragflow_like.presets import ensure_chunk_defaults_in_additional_params
 from yuxi.knowledge.read_models import KnowledgeBaseConfig
@@ -29,6 +30,7 @@ class FileStatus:
 
 
 INDEXED_STATS_STATUSES = {FileStatus.INDEXED, "done"}
+_MARKDOWN_IMAGE_URL_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
 
 
 def _should_repair_file_stats(file_meta: dict) -> bool:
@@ -310,7 +312,7 @@ class KnowledgeBase(ABC):
             from yuxi.storage.minio import get_minio_client
 
             params["image_bucket"] = get_minio_client().KB_BUCKETS["images"]
-            params["image_prefix"] = f"{kb_id}/kb-images"
+            params["image_prefix"] = self._file_image_prefix(kb_id, file_id)
 
             markdown_content = await parse_document(
                 source=file_path,
@@ -319,6 +321,8 @@ class KnowledgeBase(ABC):
 
             # Save Markdown to MinIO
             markdown_file_path = await self._save_markdown_to_minio(kb_id, file_id, markdown_content)
+            if str(file_meta.get("file_type") or "").lower() == "pdf":
+                await self._cleanup_stale_pdf_page_images(kb_id, file_id, markdown_content)
 
             # Update metadata
             file_meta["status"] = FileStatus.PARSED
@@ -427,6 +431,56 @@ class KnowledgeBase(ABC):
         )
 
         return upload_result.url
+
+    @staticmethod
+    def _file_image_prefix(kb_id: str, file_id: str) -> str:
+        """返回单个知识库文件拥有的图片对象前缀。"""
+
+        return f"{kb_id}/kb-images/{file_id}"
+
+    @classmethod
+    def _pdf_page_image_object_names(cls, kb_id: str, file_id: str, markdown: str) -> set[str]:
+        """从 Markdown 鉴权 URL 恢复当前文件仍引用的页图对象名。"""
+
+        route_prefix = f"/api/knowledge/databases/{kb_id}/images/"
+        object_prefix = f"{cls._file_image_prefix(kb_id, file_id)}/pdf-pages/"
+        object_names: set[str] = set()
+        for raw_url in _MARKDOWN_IMAGE_URL_PATTERN.findall(markdown or ""):
+            path = unquote(urlsplit(raw_url).path)
+            if not path.startswith(route_prefix):
+                continue
+            object_name = f"{kb_id}/{path[len(route_prefix) :]}"
+            if object_name.startswith(object_prefix):
+                object_names.add(object_name)
+        return object_names
+
+    async def _cleanup_stale_pdf_page_images(self, kb_id: str, file_id: str, markdown: str) -> None:
+        """成功解析后删除该文件不再被 Markdown 引用的旧页图。"""
+
+        from yuxi.storage.minio import get_minio_client
+
+        minio_client = get_minio_client()
+        bucket_name = minio_client.KB_BUCKETS["images"]
+        prefix = f"{self._file_image_prefix(kb_id, file_id)}/pdf-pages/"
+        keep = self._pdf_page_image_object_names(kb_id, file_id, markdown)
+        await asyncio.to_thread(minio_client.ensure_bucket_exists, bucket_name)
+        objects = await minio_client.alist_object_metadata(bucket_name, prefix)
+        stale = [item["object_name"] for item in objects if item["object_name"] not in keep]
+        if stale:
+            await asyncio.gather(*(minio_client.adelete_file(bucket_name, object_name) for object_name in stale))
+
+    async def _delete_file_image_objects(self, kb_id: str, file_id: str) -> None:
+        """删除单个文件拥有的全部解析图片。"""
+
+        from yuxi.storage.minio import get_minio_client
+
+        minio_client = get_minio_client()
+        bucket_name = minio_client.KB_BUCKETS["images"]
+        await asyncio.to_thread(minio_client.ensure_bucket_exists, bucket_name)
+        await minio_client.adelete_objects_by_prefix(
+            bucket_name,
+            f"{self._file_image_prefix(kb_id, file_id)}/",
+        )
 
     async def _read_minio_bytes(self, file_path: str) -> bytes:
         from yuxi.knowledge.utils.kb_utils import is_minio_url, parse_minio_url

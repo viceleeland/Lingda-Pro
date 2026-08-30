@@ -15,6 +15,7 @@ from PIL import Image
 from rapidocr import EngineType, LangDet, LangRec, ModelType, OCRVersion, RapidOCR
 
 from yuxi.knowledge.parser.base import BaseDocumentProcessor, OCRException
+from yuxi.knowledge.parser.pdf_visual import format_pdf_page_markdown
 from yuxi.utils import logger
 
 
@@ -186,6 +187,7 @@ class RapidOCRParser(BaseDocumentProcessor):
 
         params = params or {}
         zoom_x = params.get("zoom_x", 2)
+        include_page_headings = bool(params.get("preserve_page_images"))
 
         try:
             all_text = []
@@ -203,7 +205,10 @@ class RapidOCRParser(BaseDocumentProcessor):
 
                 # 立即处理,不保存到列表
                 text = self.process_image(img_pil)
-                all_text.append(text)
+                if include_page_headings:
+                    all_text.append(format_pdf_page_markdown(page_num + 1, text))
+                else:
+                    all_text.append(text)
 
                 if (page_num + 1) % 10 == 0:
                     logger.info(f"已处理 {page_num + 1}/{total_pages} 页")

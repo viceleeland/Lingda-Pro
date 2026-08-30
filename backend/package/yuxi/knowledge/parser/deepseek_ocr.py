@@ -14,8 +14,10 @@ from typing import Any
 
 import pypdfium2 as pdfium
 import requests
+from pypdf import PdfReader
 
 from yuxi.knowledge.parser.base import BaseDocumentProcessor, DocumentParserException
+from yuxi.knowledge.parser.pdf_visual import format_pdf_page_markdown, is_visual_page
 from yuxi.utils import logger
 
 
@@ -25,6 +27,11 @@ class DeepSeekOCRParser(BaseDocumentProcessor):
     service_name = "deepseek_ocr"
     display_name = "DeepSeek OCR"
     supported_extensions = [".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp"]
+    api_key_env = "SILICONFLOW_API_KEY"
+    default_api_url = "https://api.siliconflow.cn/v1/chat/completions"
+    default_model = "deepseek-ai/DeepSeek-OCR"
+    default_prompt = "<image>\n<|grounding|>Convert the document to markdown. "
+    request_body_overrides: dict[str, Any] = {}
 
     # MIME type mapping for supported formats
     MIME_TYPE_MAP = {
@@ -39,14 +46,17 @@ class DeepSeekOCRParser(BaseDocumentProcessor):
     def __init__(self, api_key: str | None = None, api_url: str | None = None):
         """使用配置中心传入的 SiliconFlow 凭证和固定服务端点初始化解析器。"""
 
-        self.api_key = api_key or os.getenv("SILICONFLOW_API_KEY")
+        self.api_key = api_key or os.getenv(self.api_key_env)
         if not self.api_key:
             raise DocumentParserException(
-                "SILICONFLOW_API_KEY environment variable not set", "deepseek_ocr", "missing_api_key"
+                f"{self.api_key_env} environment variable not set",
+                self.get_service_name(),
+                "missing_api_key",
             )
 
-        self.api_url = api_url or "https://api.siliconflow.cn/v1/chat/completions"
-        self.model = "deepseek-ai/DeepSeek-OCR"
+        self.api_url = api_url or self.default_api_url
+        self.model = self.default_model
+        self.prompt = self.default_prompt
 
         self.headers = {
             "Content-Type": "application/json",
@@ -63,8 +73,8 @@ class DeepSeekOCRParser(BaseDocumentProcessor):
             if response.status_code == 200:
                 return {
                     "status": "healthy",
-                    "message": "DeepSeek OCR (SiliconFlow) is available",
-                    "details": {"api_url": self.api_url},
+                    "message": f"{self.display_name} is available",
+                    "details": {"api_url": self.api_url, "model": self.model},
                 }
             elif response.status_code == 401:
                 return {"status": "unhealthy", "message": "Invalid API Key", "details": {"error_code": "401"}}
@@ -134,7 +144,10 @@ class DeepSeekOCRParser(BaseDocumentProcessor):
                 img_bytes = buf.getvalue()
 
                 page_text = self._call_api(img_bytes, "image/png", params)
-                full_text.append(page_text)
+                if params.get("preserve_page_images"):
+                    full_text.append(format_pdf_page_markdown(i + 1, page_text))
+                else:
+                    full_text.append(page_text)
 
             return "\n\n".join(full_text)
         finally:
@@ -157,7 +170,7 @@ class DeepSeekOCRParser(BaseDocumentProcessor):
                 "role": "user",
                 "content": [
                     {"type": "image_url", "image_url": {"url": data_url}},
-                    {"type": "text", "text": "<image>\n<|grounding|>Convert the document to markdown. "},
+                    {"type": "text", "text": self.prompt},
                 ],
             }
         ]
@@ -168,6 +181,7 @@ class DeepSeekOCRParser(BaseDocumentProcessor):
             "max_tokens": int(params.get("max_tokens", 4096)),
             "temperature": float(params.get("temperature", 0.1)),
         }
+        payload.update(self.request_body_overrides)
 
         response = requests.post(
             self.api_url,
@@ -194,3 +208,53 @@ class DeepSeekOCRParser(BaseDocumentProcessor):
     def _get_mime_type(self, file_path: str) -> str:
         file_ext = Path(file_path).suffix.lower()
         return self.MIME_TYPE_MAP.get(file_ext, "image/jpeg")  # Default fallback
+
+
+class DeepSeekVisionParser(DeepSeekOCRParser):
+    """使用 DeepSeek 官方视觉模型生成 Markdown 与视觉描述。"""
+
+    service_name = "deepseek_vision"
+    display_name = "DeepSeek 官方视觉"
+    api_key_env = "DEEPSEEK_API_KEY"
+    default_api_url = "https://api.deepseek.com/chat/completions"
+    default_model = "deepseek-v4-flash-vision-exp"
+    default_prompt = (
+        "Convert this document image to Markdown. Preserve headings, tables, formulas, "
+        "figure labels and visible text. Add a concise visual description of charts, "
+        "diagrams, contours, colors and geometry."
+    )
+    request_body_overrides = {"thinking": {"type": "disabled"}}
+
+    def _process_pdf(self, file_path: str, params: dict[str, Any]) -> str:
+        """读取普通页文本，只对视觉页调用官方视觉模型。"""
+
+        reader = PdfReader(file_path)
+        pdf = pdfium.PdfDocument(file_path)
+        scale = int(params.get("pdf_dpi", 160)) / 72
+        pages: list[str] = []
+        visual_page_count = 0
+
+        try:
+            for index, page in enumerate(reader.pages):
+                page_number = index + 1
+                text = (page.extract_text() or "").strip()
+                parts = [f"## Page {page_number}"]
+                if text:
+                    parts.append(text)
+
+                if is_visual_page(text, page):
+                    bitmap = pdf[index].render(scale=scale).to_pil()
+                    buffer = io.BytesIO()
+                    bitmap.save(buffer, format="PNG")
+                    description = self._call_api(buffer.getvalue(), "image/png", params)
+                    parts.extend(["### Visual description", description])
+                    visual_page_count += 1
+
+                pages.append("\n\n".join(parts))
+        finally:
+            pdf.close()
+
+        logger.info(
+            f"DeepSeek Vision PDF completed: pages={len(reader.pages)}, visual_pages={visual_page_count}"
+        )
+        return "\n\n".join(pages)

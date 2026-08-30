@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import os
 import re
 import tempfile
@@ -18,7 +19,11 @@ from docling.datamodel.base_models import InputFormat
 from docling.document_converter import DocumentConverter
 from langchain_community.document_loaders import PyPDFLoader
 from markdownify import markdownify as md_convert
+import pypdfium2 as pdfium
+from pypdf import PdfReader
 
+from yuxi.knowledge.parser.base import DocumentParserException
+from yuxi.knowledge.parser.pdf_visual import is_visual_page, visual_page_caption
 from yuxi.knowledge.parser.zip_utils import process_zip_file as _process_zip_file
 from yuxi.knowledge.utils.pdf_utils import validate_pdf_page_tree_loadable
 from yuxi.storage.minio import get_minio_client
@@ -61,8 +66,19 @@ class MarkdownParseResult:
     artifacts: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class PdfVisualRenderResult:
+    """PDF 页图渲染结果及其页级 Markdown。"""
+
+    markdown: str
+    visual_page_blocks: dict[int, str]
+    image_markdown_by_page: dict[int, str]
+
+
 _docling_converter: DocumentConverter | None = None
 _docling_converter_lock = threading.Lock()
+_PDF_PAGE_RENDER_MAX_PIXELS = 25_000_000
+_PDF_PAGE_RENDER_MAX_DIMENSION = 10_000
 
 
 def _get_docling_converter() -> DocumentConverter:
@@ -103,7 +119,14 @@ def _resolve_ocr_engine_params(params: dict | None) -> tuple[str, dict[str, Any]
     return engine, processor_params
 
 
-def _upload_image_to_minio(image_data: bytes, filename: str, bucket_name: str, object_prefix: str) -> str:
+def _upload_image_to_minio(
+    image_data: bytes,
+    filename: str,
+    bucket_name: str,
+    object_prefix: str,
+    *,
+    stable_name: bool = False,
+) -> str:
     """上传图片到 MinIO，返回经后端鉴权代理访问的 URL。"""
     from yuxi.knowledge.utils.kb_utils import build_kb_image_proxy_url
 
@@ -111,8 +134,10 @@ def _upload_image_to_minio(image_data: bytes, filename: str, bucket_name: str, o
     minio_client.ensure_bucket_exists(bucket_name)
 
     normalized_prefix = object_prefix.strip("/") or "unknown/kb-images"
-    timestamp = int(time.time() * 1000000)
-    object_name = f"{normalized_prefix}/{timestamp}_{Path(filename).name}"
+    stored_filename = Path(filename).name
+    if not stable_name:
+        stored_filename = f"{int(time.time() * 1000000)}_{stored_filename}"
+    object_name = f"{normalized_prefix}/{stored_filename}"
 
     minio_client.upload_file(
         bucket_name=bucket_name,
@@ -215,6 +240,135 @@ def _convert_csv_to_markdown(file_path: Path) -> str:
     return "\n\n".join(tables)
 
 
+def _bounded_pdf_render_scale(width_points: float, height_points: float, dpi: int) -> float:
+    """限制单页位图尺寸，避免异常 MediaBox 在渲染前耗尽 worker 内存。"""
+
+    if width_points <= 0 or height_points <= 0:
+        raise ValueError("PDF page dimensions must be positive")
+
+    requested_scale = dpi / 72
+    pixel_scale = (_PDF_PAGE_RENDER_MAX_PIXELS / (width_points * height_points)) ** 0.5
+    dimension_scale = min(
+        _PDF_PAGE_RENDER_MAX_DIMENSION / width_points,
+        _PDF_PAGE_RENDER_MAX_DIMENSION / height_points,
+    )
+    return min(requested_scale, pixel_scale, dimension_scale)
+
+
+def _render_pdf_visual_pages(
+    file_path: Path,
+    docs: list[Any],
+    params: dict[str, Any],
+) -> PdfVisualRenderResult:
+    image_bucket, image_prefix = _resolve_image_storage_params(params)
+    page_image_prefix = f"{image_prefix}/pdf-pages"
+    image_scope = str(params.get("pdf_page_image_scope") or "visual").strip().lower()
+    render_all = image_scope == "all"
+    dpi = max(96, min(int(params.get("pdf_page_image_dpi") or 144), 240))
+
+    reader = PdfReader(str(file_path))
+    pdf_doc = pdfium.PdfDocument(str(file_path))
+    pages: list[str] = []
+    visual_page_blocks: dict[int, str] = {}
+    image_markdown_by_page: dict[int, str] = {}
+    visual_page_count = 0
+
+    try:
+        for index, doc in enumerate(docs):
+            page_number = index + 1
+            text = doc.page_content.strip()
+            is_visual = render_all or (
+                index < len(reader.pages) and is_visual_page(text, reader.pages[index])
+            )
+            page_parts = [f"## Page {page_number}"]
+            if is_visual:
+                try:
+                    pdf_page = pdf_doc[index]
+                    width_points, height_points = pdf_page.get_size()
+                    render_scale = _bounded_pdf_render_scale(width_points, height_points, dpi)
+                    if render_scale < dpi / 72:
+                        logger.warning(
+                            "PDF page render downscaled: "
+                            f"page={page_number}, points={width_points:.0f}x{height_points:.0f}, "
+                            f"scale={render_scale:.4f}"
+                        )
+                    image = pdf_page.render(scale=render_scale).to_pil()
+                    buffer = io.BytesIO()
+                    image.save(buffer, format="PNG", optimize=True)
+                    filename = f"page_{page_number:04d}.png"
+                    image_url = _upload_image_to_minio(
+                        buffer.getvalue(),
+                        filename,
+                        image_bucket,
+                        page_image_prefix,
+                        stable_name=True,
+                    )
+                    caption = visual_page_caption(text, page_number)
+                    image_markdown = f"![{caption}]({image_url})"
+                    page_parts.append(image_markdown)
+                    image_markdown_by_page[page_number] = image_markdown
+                    visual_page_count += 1
+                except Exception as exc:  # noqa: BLE001
+                    raise DocumentParserException(
+                        f"PDF 页图生成失败: page={page_number}, error={exc}",
+                        "pdf_visual",
+                        "page_image_failed",
+                    ) from exc
+
+            if text:
+                page_parts.append(text)
+            page_block = "\n\n".join(page_parts)
+            pages.append(page_block)
+            if is_visual:
+                visual_page_blocks[page_number] = page_block
+    finally:
+        pdf_doc.close()
+
+    logger.info(
+        f"PDF multimodal extraction completed: pages={len(docs)}, visual_pages={visual_page_count}, dpi={dpi}"
+    )
+    return PdfVisualRenderResult(
+        markdown="\n\n".join(pages),
+        visual_page_blocks=visual_page_blocks,
+        image_markdown_by_page=image_markdown_by_page,
+    )
+
+
+_PDF_PAGE_HEADING_PATTERN = re.compile(r"(?m)^## Page (?P<page_number>\d+)\s*$")
+
+
+def _attach_pdf_page_images(markdown: str, rendered: PdfVisualRenderResult) -> str:
+    """把页图插回已有页段；无页段的 OCR 结果追加完整视觉页。"""
+
+    matches = list(_PDF_PAGE_HEADING_PATTERN.finditer(markdown))
+    if not matches:
+        visual_pages = "\n\n".join(rendered.visual_page_blocks.values())
+        return f"{markdown}\n\n# Visual pages\n\n{visual_pages}" if visual_pages else markdown
+
+    parts = [markdown[: matches[0].start()].rstrip()]
+    attached_pages: set[int] = set()
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        block = markdown[match.start() : end].strip()
+        page_number = int(match.group("page_number"))
+        image_markdown = rendered.image_markdown_by_page.get(page_number)
+        if image_markdown and page_number not in attached_pages:
+            heading_end = block.find("\n")
+            if heading_end < 0:
+                block = f"{block}\n\n{image_markdown}"
+            else:
+                block = f"{block[:heading_end].rstrip()}\n\n{image_markdown}\n\n{block[heading_end:].strip()}"
+            attached_pages.add(page_number)
+        parts.append(block)
+
+    unmatched = [
+        block for page_number, block in rendered.visual_page_blocks.items() if page_number not in attached_pages
+    ]
+    if unmatched:
+        parts.extend(["# Visual pages", *unmatched])
+    return "\n\n".join(part for part in parts if part)
+
+
 def pdfreader(file_path, params=None):
     """读取 PDF 文件并返回 text 文本。"""
     if isinstance(file_path, str):
@@ -225,6 +379,8 @@ def pdfreader(file_path, params=None):
 
     loader = PyPDFLoader(str(file_path))
     docs = loader.load()
+    if params and params.get("preserve_page_images"):
+        return _render_pdf_visual_pages(file_path, docs, params).markdown
     text = "\n\n".join([d.page_content for d in docs])
     return text
 
@@ -245,7 +401,19 @@ def parse_pdf(file, params=None):
     processor_kwargs = processor_params.pop("_ocr_processor_kwargs", {})
 
     try:
-        return DocumentProcessorFactory.process_file(opt_ocr, file, processor_params, processor_kwargs)
+        result = DocumentProcessorFactory.process_file(opt_ocr, file, processor_params, processor_kwargs)
+        ocr_engines_without_image_assets = {
+            "rapid_ocr",
+            "pp_structure_v3_ocr",
+            "deepseek_ocr",
+            "deepseek_vision",
+            "paddleocr_pp_ocrv6",
+        }
+        if processor_params.get("preserve_page_images") and opt_ocr in ocr_engines_without_image_assets:
+            docs = PyPDFLoader(str(file)).load()
+            rendered = _render_pdf_visual_pages(Path(file), docs, processor_params)
+            result = _attach_pdf_page_images(result, rendered)
+        return result
     except DocumentProcessorException as e:
         logger.error(f"文档处理失败: {e.service_name} - {str(e)}")
         raise
@@ -266,7 +434,7 @@ def parse_image(file, params=None):
             "图像文件必须启用OCR才能提取文本内容。"
             "请选择OCR方式 "
             "(rapid_ocr/mineru_ocr/mineru_official/pp_structure_v3_ocr/deepseek_ocr/"
-            "paddleocr_vl_1_6/paddleocr_pp_ocrv6) 或移除该文件。"
+            "deepseek_vision/paddleocr_vl_1_6/paddleocr_pp_ocrv6) 或移除该文件。"
         )
 
     image_bucket, image_prefix = _resolve_image_storage_params(processor_params)

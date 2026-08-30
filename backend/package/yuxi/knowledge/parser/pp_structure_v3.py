@@ -13,6 +13,7 @@ from typing import Any
 import requests
 
 from yuxi.knowledge.parser.base import BaseDocumentProcessor, DocumentParserException
+from yuxi.knowledge.parser.pdf_visual import format_pdf_page_markdown
 from yuxi.utils import logger
 
 
@@ -103,7 +104,13 @@ class PPStructureV3Parser(BaseDocumentProcessor):
             except Exception:
                 raise DocumentParserException(f"{error_msg}: {response.text}", self.get_service_name(), "api_error")
 
-    def _parse_api_result(self, api_result: dict[str, Any], file_path: str) -> dict[str, Any]:
+    def _parse_api_result(
+        self,
+        api_result: dict[str, Any],
+        file_path: str,
+        *,
+        include_page_headings: bool = False,
+    ) -> dict[str, Any]:
         """解析API返回结果"""
         # 基本信息
         parsed_result = {
@@ -129,12 +136,18 @@ class PPStructureV3Parser(BaseDocumentProcessor):
         all_text_content = []
 
         # 解析每页结果
-        for page_result in layout_results:
+        for page_number, page_result in enumerate(layout_results, start=1):
             # Markdown内容
+            page_text = ""
             if "markdown" in page_result:
                 markdown = page_result["markdown"]
-                if markdown.get("text"):
-                    all_text_content.append(markdown["text"])
+                if isinstance(markdown.get("text"), str):
+                    page_text = markdown["text"].strip()
+
+            if include_page_headings:
+                all_text_content.append(format_pdf_page_markdown(page_number, page_text))
+            elif page_text:
+                all_text_content.append(page_text)
 
             # 详细识别结果
             if "prunedResult" in page_result:
@@ -255,7 +268,11 @@ class PPStructureV3Parser(BaseDocumentProcessor):
                 )
 
             # 解析结果
-            result = self._parse_api_result(api_result, file_path)
+            result = self._parse_api_result(
+                api_result,
+                file_path,
+                include_page_headings=file_ext == ".pdf" and bool(params.get("preserve_page_images")),
+            )
             text = result.get("full_text", "")
 
             processing_time = time.time() - start_time

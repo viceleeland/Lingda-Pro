@@ -124,6 +124,27 @@ def test_paddleocr_pp_ocrv6_submits_model_specific_payload(tmp_path: Path, monke
     }
 
 
+def test_paddleocr_pp_ocrv6_preserves_pdf_page_boundaries_for_page_images() -> None:
+    parser = PaddleOCRPPOCRv6Parser(api_token="token")
+    rows = [
+        {
+            "result": {
+                "ocrResults": [
+                    {"prunedResult": {"rec_texts": ["OCR page one"]}},
+                    {"prunedResult": {"rec_texts": ["OCR page two"]}},
+                ]
+            }
+        }
+    ]
+
+    markdown = parser._extract_markdown(
+        rows,
+        {"_source_file_extension": ".pdf", "preserve_page_images": True},
+    )
+
+    assert markdown == "## Page 1\n\nOCR page one\n\n## Page 2\n\nOCR page two"
+
+
 def test_paddleocr_url_input_uses_json_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     submitted: dict[str, Any] = {}
 

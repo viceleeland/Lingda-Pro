@@ -44,6 +44,28 @@ test('FileUploadModal 文件数量与进度统计仅计算受支持且非隐藏�
   assert.match(source, /const isSupportedUploadFile\s*=\s*\(file\)/)
 })
 
+test('FileUploadModal 默认保留 PDF 视觉页并随处理参数提交', () => {
+  const source = readSource('../../src/components/FileUploadModal.vue')
+
+  assert.match(source, /v-model:checked="processingParams\.preserve_page_images"/)
+  assert.match(source, /preserve_page_images:\s*true/)
+  assert.match(source, /const params = \{ \.\.\.processingParams\.value/)
+})
+
+test('FileUploadModal 在移动端收敛上传方式并纵向排列双列配置', () => {
+  const source = readSource('../../src/components/FileUploadModal.vue')
+  const mobileStyles = source.slice(source.indexOf('@media (max-width: 768px)'))
+
+  assert.match(
+    mobileStyles,
+    /\.custom-segmented\s*\{[\s\S]*?width:\s*100%;[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/
+  )
+  assert.match(
+    mobileStyles,
+    /\.setting-row\.two-cols\s*\{\s*flex-direction:\s*column;\s*gap:\s*8px;/
+  )
+})
+
 test('documentApi.addDocuments 能够将 source_paths 正确打包发送给知识库文档添加端点', async () => {
   const server = await createServer({
     server: { middlewareMode: true },

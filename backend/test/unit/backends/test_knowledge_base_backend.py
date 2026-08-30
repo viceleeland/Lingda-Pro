@@ -36,3 +36,28 @@ async def test_resolve_visible_knowledge_bases_filters_by_kb_id(monkeypatch):
     databases = await knowledge_base_backend.resolve_visible_knowledge_bases_for_context(context)
 
     assert databases == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_visible_knowledge_bases_reuses_current_database_session(monkeypatch):
+    import yuxi.knowledge.runtime as knowledge_runtime
+
+    expected_db = object()
+    expected_user = SimpleNamespace(uid="u1")
+    calls = []
+
+    async def fake_get_databases_by_user(user, *, db=None):
+        calls.append((user, db))
+        return []
+
+    monkeypatch.setattr(knowledge_runtime.knowledge_base, "get_databases_by_user", fake_get_databases_by_user)
+
+    context = SimpleNamespace(uid="u1", knowledges=[])
+    databases = await knowledge_base_backend.resolve_visible_knowledge_bases_for_context(
+        context,
+        db=expected_db,
+        user=expected_user,
+    )
+
+    assert databases == []
+    assert calls == [(expected_user, expected_db)]

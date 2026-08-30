@@ -105,6 +105,36 @@ def test_chunk_records_include_reserved_position_fields() -> None:
     assert "start_char_pos" in chunks[1]
 
 
+def test_pdf_page_image_chunks_keep_each_image_with_its_page_without_overlap_duplicates() -> None:
+    first_url = "/api/knowledge/databases/kb-1/images/kb-images/file-1/pdf-pages/page_0001.png"
+    second_url = "/api/knowledge/databases/kb-1/images/kb-images/file-1/pdf-pages/page_0002.png"
+    first_page_body = "\n".join(f"first page detail line {index}" for index in range(20))
+    content = (
+        "# OCR text\n\nfull document OCR\n\n"
+        f"## Page 1\n\n![Figure 1]({first_url})\n\nFigure 1 first page body\n{first_page_body}\n\n"
+        f"## Page 2\n\n![Figure 2]({second_url})\n\nFigure 2 second page body"
+    )
+
+    chunks = chunk_markdown(
+        markdown_content=content,
+        file_id="file-1",
+        filename="manual.pdf",
+        processing_params={
+            "chunk_preset_id": "general",
+            "chunk_parser_config": {"chunk_token_num": 30, "overlapped_percent": 15},
+        },
+    )
+
+    first_chunks = [chunk["content"] for chunk in chunks if first_url in chunk["content"]]
+    second_chunks = [chunk["content"] for chunk in chunks if second_url in chunk["content"]]
+    page_one_chunks = [chunk["content"] for chunk in chunks if "first page" in chunk["content"]]
+    assert len(first_chunks) == 1
+    assert len(second_chunks) == 1
+    assert len(page_one_chunks) > 1
+    assert "## Page 1" in first_chunks[0] and second_url not in first_chunks[0]
+    assert "## Page 2" in second_chunks[0] and first_url not in second_chunks[0]
+
+
 def test_book_chunking_hierarchical_merge() -> None:
     content = """
 第一章 总则

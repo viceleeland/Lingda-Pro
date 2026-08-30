@@ -16,6 +16,12 @@ Yuxi 把文档处理拆成两步：先把原文件保存到知识库，再根据
 
 图片文件必须使用 OCR 引擎。PDF 可以选择 OCR；选择 `disable` 时，系统会尝试直接读取 PDF 文本层，扫描版 PDF 通常得不到内容。
 
+上传 PDF 时可以开启“保留 PDF 视觉页，支持图片检索”。系统把具有编号的 Figure、Fig.、Table、图、表题或内嵌图片（包括嵌套 Form XObject 中的栅格图片）的页面渲染为页图，保存到当前知识库的私有图片存储，并把原 PDF 页码、图题、图片链接和该页文字写入同一个 `## Page N` Markdown 段落。纯文本页不生成图片对象。带页图的 Markdown 按原页隔离分块，overlap 不会把相邻页图复制进同一结果。检索继续使用当前知识库的 embedding、BM25 和 reranker；命中视觉页时，查询结果会显示对应页图。该能力支持用文字查找图片，不等同于原生图片向量或以图搜图。
+
+直接读取文本层时，页图和页面正文按页组织。启用页图后，RapidOCR、PP-Structure-V3、DeepSeek OCR 与 PP-OCRv6 等没有可持久图片资产的 OCR 会保留逐页输出边界，页图插入对应的 `## Page N` OCR 正文；仅在兼容没有页边界的结果时，才追加包含原页码和文本层正文的视觉页。DeepSeek Vision 的页图也会插回相同 `## Page N` 段落，与该页视觉描述共同索引。已经返回图片产物的 MinerU 和 PaddleOCR-VL 使用各自的图片链路，不重复生成页图。视觉页默认按 144 DPI 流式渲染，长文档的处理时间和私有图片存储占用会随视觉页数量增加。
+
+启用页图后，单页渲染或上传失败会使本次解析进入 `error_parsing`，错误信息包含 `pdf_visual` 和失败页码，不会在缺图时静默标记为完整成功。排除存储或 PDF 问题后可以重试解析。
+
 ZIP 处理会优先使用名为 `full.md` 的 Markdown 文件，否则使用压缩包中找到的第一个 `.md` 文件，并把 `images/` 下的图片上传到知识库图片存储。压缩包内的绝对路径和 `..` 路径会被拒绝。
 
 ## 从 URL 导入网页
@@ -37,10 +43,11 @@ YUXI_URL_WHITELIST=github.com,docs.example.com,*.wikipedia.org
 | MinerU Official | MinerU 云服务 | 不在本机部署 GPU，使用官方解析服务 |
 | PP-Structure-V3 | 本地 GPU 服务 | 表格、票据和版面解析 |
 | DeepSeek OCR | SiliconFlow API | 使用 SiliconFlow 的 DeepSeek OCR 模型 |
+| DeepSeek 官方视觉 | DeepSeek API | 读取图片文字并描述云图、曲线、示意图与几何信息 |
 | PaddleOCR-VL-1.6 | 百度 AI Studio 云服务 | 文档版面解析，输出 Markdown |
 | PP-OCRv6 | 百度 AI Studio 云服务 | 基础 OCR，输出纯文本 |
 
-系统内部引擎 ID 为 `rapid_ocr`、`mineru_ocr`、`mineru_official`、`pp_structure_v3_ocr`、`deepseek_ocr`、`paddleocr_vl_1_6` 和 `paddleocr_pp_ocrv6`。页面中的健康状态只表示配置或服务探测结果，真正解析时仍会验证凭证和接口。
+系统内部引擎 ID 为 `rapid_ocr`、`mineru_ocr`、`mineru_official`、`pp_structure_v3_ocr`、`deepseek_ocr`、`deepseek_vision`、`paddleocr_vl_1_6` 和 `paddleocr_pp_ocrv6`。页面中的健康状态只表示配置或服务探测结果，真正解析时仍会验证凭证和接口。
 
 ## 在页面配置
 
@@ -94,6 +101,10 @@ API/worker 默认使用 `PADDLEX_URI=http://paddlex:8080`。本地 GPU 和镜像
 
 在“智能体 → 模型供应商”中启用 `siliconflow-cn` 并配置凭证。DeepSeek OCR 会复用该供应商的 API 地址和 API Key，不接受单独的 OCR 凭证配置。
 
+### DeepSeek 官方视觉
+
+在“智能体 → 模型供应商”中启用 `deepseek` 并通过 `DEEPSEEK_API_KEY` 配置凭证。该引擎调用 `deepseek-v4-flash-vision-exp`，除提取可见文字外，还会为图表、云图、示意图、颜色和几何关系生成简短描述。它使用 DeepSeek 官方账户的计费余额，与 SiliconFlow Key 和余额互不通用。
+
 ### PaddleOCR API
 
 在[百度 AI Studio Access Token 页面](https://aistudio.baidu.com/account/accessToken)获取 Access Token：
@@ -113,7 +124,7 @@ PADDLEOCR_API_URL=https://paddleocr.aistudio-app.com/api/v2/ocr/jobs
 
 ## 图片访问
 
-解析器生成的知识库图片保存在私有 `kb-images` bucket，通过带知识库权限校验的后端路径访问。不要把 MinIO 对象地址直接写成公开 URL，也不要为方便预览而开放整个 MinIO 管理端口。头像等公开图片使用 `/minio/public/...` 同源只读代理，二者边界不同。
+解析器生成的知识库图片保存在私有 `kb-images` bucket，通过带知识库权限校验的后端路径访问。PDF 页图对象使用 `{kb_id}/kb-images/{file_id}/pdf-pages/page_NNNN.png` 文件级稳定名称：重解析会覆盖同页对象，并在新 Markdown 保存后清理不再引用的页图；删除文件会清理整个文件级图片前缀。旧版本直接写在知识库根图片前缀下的时间戳对象没有文件归属，不能安全按文件自动清理，只能随整库删除或由运维确认后清理。不要把 MinIO 对象地址直接写成公开 URL，也不要为方便预览而开放整个 MinIO 管理端口。头像等公开图片使用 `/minio/public/...` 同源只读代理，二者边界不同。
 
 ## 文件限制与排查
 

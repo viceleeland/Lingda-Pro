@@ -2,9 +2,6 @@
   <a-modal v-model:open="visible" title="添加文件" width="800px" @cancel="handleCancel">
     <template #footer>
       <div class="footer-container">
-        <a-button type="link" class="help-link-btn" @click="openDocLink">
-          <CircleHelp :size="14" /> 文档处理说明
-        </a-button>
         <div class="footer-buttons">
           <a-button key="back" @click="handleCancel">取消</a-button>
           <a-button
@@ -73,6 +70,17 @@
                 @change="ocrEngineTouched = true"
                 @options-loaded="handleOcrOptionsLoaded"
               />
+              <a-checkbox
+                v-if="hasPdfFiles"
+                v-model:checked="processingParams.preserve_page_images"
+                :disabled="chunkLoading"
+                class="preserve-page-images"
+              >
+                保留 PDF 视觉页，支持图片检索
+              </a-checkbox>
+              <p v-if="hasPdfFiles" class="param-description">
+                自动保存含图题或内嵌图片的页图，并与页码和正文共同建立索引。
+              </p>
             </div>
           </div>
         </div>
@@ -294,7 +302,6 @@ import {
   FolderUp,
   FolderOpen,
   RotateCw,
-  CircleHelp,
   Info,
   Download,
   Trash2,
@@ -727,7 +734,8 @@ const ocrEngineTouched = ref(false)
 
 // 解析参数
 const processingParams = ref({
-  ocr_engine: DEFAULT_OCR_ENGINE
+  ocr_engine: DEFAULT_OCR_ENGINE,
+  preserve_page_images: true
 })
 
 // 自动入库相关
@@ -774,6 +782,14 @@ const hasPdfOrImageFiles = computed(() => {
 
     const ext = filePath.substring(filePath.lastIndexOf('.')).toLowerCase()
     return ocrExtensions.includes(ext)
+  })
+})
+
+const hasPdfFiles = computed(() => {
+  return validFileList.value.some((file) => {
+    if (file.status !== 'done') return false
+    const filePath = file.response?.file_path || file.name
+    return String(filePath || '').toLowerCase().endsWith('.pdf')
   })
 })
 
@@ -1134,14 +1150,6 @@ const getAuthHeaders = () => {
   return userStore.getAuthHeaders()
 }
 
-const openDocLink = () => {
-  window.open(
-    'https://xerrors.github.io/Yuxi/advanced/document-processing.html',
-    '_blank',
-    'noopener'
-  )
-}
-
 const chunkData = async () => {
   if (!kbId.value) {
     message.error('请先选择知识库')
@@ -1367,7 +1375,7 @@ const chunkData = async () => {
 <style lang="less" scoped>
 .footer-container {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   width: 100%;
 }
@@ -1400,19 +1408,6 @@ const chunkData = async () => {
     font-size: 13px;
     color: var(--gray-600);
     font-weight: 500;
-  }
-}
-
-.help-link-btn {
-  color: var(--gray-600);
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-
-  &:hover {
-    color: var(--main-color);
   }
 }
 
@@ -2041,6 +2036,24 @@ const chunkData = async () => {
 }
 
 @media (max-width: 768px) {
+  .custom-segmented {
+    width: 100%;
+
+    :deep(.ant-segmented-group) {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    :deep(.ant-segmented-item) {
+      min-width: 0;
+    }
+  }
+
+  .setting-row.two-cols {
+    flex-direction: column;
+    gap: 8px;
+  }
+
   .top-action-bar {
     flex-direction: column;
     align-items: stretch;

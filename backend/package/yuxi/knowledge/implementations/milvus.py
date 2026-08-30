@@ -841,9 +841,12 @@ class MilvusKB(KnowledgeBase):
                 parse_params = {
                     **resolved_params,
                     "image_bucket": get_minio_client().KB_BUCKETS["images"],
-                    "image_prefix": f"{kb_id}/kb-images",
+                    "image_prefix": self._file_image_prefix(kb_id, file_id),
                 }
                 markdown_content = await parse_document(source=file_path, params=parse_params)
+                markdown_file_path = await self._save_markdown_to_minio(kb_id, file_id, markdown_content)
+                if str(file_meta.get("file_type") or "").lower() == "pdf":
+                    await self._cleanup_stale_pdf_page_images(kb_id, file_id, markdown_content)
 
                 # 重新生成 chunks
                 chunks = self._split_text_into_chunks(markdown_content, file_id, filename, resolved_params)
@@ -860,11 +863,17 @@ class MilvusKB(KnowledgeBase):
 
                 # 更新元数据状态
                 file_meta["status"] = FileStatus.INDEXED
+                file_meta["markdown_file"] = markdown_file_path
                 file_meta.update(chunk_stats)
                 await KnowledgeFileRepository().update_fields(
                     file_id=file_id,
                     kb_id=kb_id,
-                    data={"status": FileStatus.INDEXED, "error_message": None, **chunk_stats},
+                    data={
+                        "status": FileStatus.INDEXED,
+                        "markdown_file": markdown_file_path,
+                        "error_message": None,
+                        **chunk_stats,
+                    },
                 )
                 # 返回更新后的文件信息
                 updated_file_meta = file_meta.copy()
@@ -1284,6 +1293,7 @@ class MilvusKB(KnowledgeBase):
         """删除文件（包括元数据）"""
         # 先删除 Milvus 中的 chunks 数据
         await self.delete_file_chunks_only(kb_id, file_id)
+        await self._delete_file_image_objects(kb_id, file_id)
 
         await KnowledgeFileRepository().delete(file_id)
 

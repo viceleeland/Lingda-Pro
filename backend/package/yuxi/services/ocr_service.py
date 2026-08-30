@@ -151,6 +151,15 @@ async def _build_processor_kwargs(db: AsyncSession, engine_id: str) -> dict[str,
             "api_key": api_key,
             "api_url": f"{provider.base_url.rstrip('/')}/chat/completions",
         }
+    if engine_id == "deepseek_vision":
+        provider = await get_model_provider_by_id(db, "deepseek")
+        api_key = resolve_api_key(provider) if provider and provider.is_enabled else None
+        if not api_key:
+            raise ValueError("deepseek 模型供应商凭证不可用")
+        return {
+            "api_key": api_key,
+            "api_url": f"{provider.base_url.rstrip('/')}/chat/completions",
+        }
     if engine_id in {"paddleocr_vl_1_6", "paddleocr_pp_ocrv6"}:
         opts = await paddleocr_api_opts.get(db)
         return {key: value for key, value in opts.items() if value}

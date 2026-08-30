@@ -14,6 +14,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { useUserStore } from '@/stores/user'
+import { isAuthenticatedKbImageUrl } from '@/utils/kb_utils'
 import { renderMarkdown } from '@/utils/markdown_preview'
 import { HTML_PREVIEW_MAX_HEIGHT, HTML_PREVIEW_MIN_HEIGHT } from '@/utils/htmlPreviewRenderer'
 import 'katex/dist/katex.min.css'
@@ -42,8 +43,6 @@ const kbImageBlobUrls = new Set()
 let pendingMarkdownHtml = null
 
 const HTML_PREVIEW_HEIGHT_MESSAGE = 'yuxi-html-preview-height'
-
-const KB_IMAGE_PROXY_PATH_RE = /\/api\/knowledge\/databases\/[^/]+\/images\//
 
 const getHtmlPreviewCssNumber = (slot, property, fallback) => {
   const preview = slot.closest('.html-preview-render')
@@ -326,7 +325,7 @@ const enhanceKbImages = () => {
 
   root.querySelectorAll('img').forEach((img) => {
     const src = img.getAttribute('src')
-    if (!src || !KB_IMAGE_PROXY_PATH_RE.test(src) || img.dataset.kbImageLoaded) return
+    if (!isAuthenticatedKbImageUrl(src) || img.dataset.kbImageLoaded) return
 
     img.dataset.kbImageLoading = 'true'
     fetch(src, { headers: userStore.getAuthHeaders() })

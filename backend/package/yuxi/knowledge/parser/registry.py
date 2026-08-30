@@ -8,6 +8,7 @@ PROCESSOR_TYPES = {
     "mineru_official": ("yuxi.knowledge.parser.mineru_official", "MinerUOfficialParser"),
     "pp_structure_v3_ocr": ("yuxi.knowledge.parser.pp_structure_v3", "PPStructureV3Parser"),
     "deepseek_ocr": ("yuxi.knowledge.parser.deepseek_ocr", "DeepSeekOCRParser"),
+    "deepseek_vision": ("yuxi.knowledge.parser.deepseek_ocr", "DeepSeekVisionParser"),
     "paddleocr_vl_1_6": ("yuxi.knowledge.parser.paddleocr_api", "PaddleOCRVLParser"),
     "paddleocr_pp_ocrv6": ("yuxi.knowledge.parser.paddleocr_api", "PaddleOCRPPOCRv6Parser"),
 }

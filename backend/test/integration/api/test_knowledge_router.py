@@ -605,9 +605,9 @@ async def test_knowledge_routes_enforce_permissions(test_client, standard_user, 
 
 
 async def test_kb_image_proxy_requires_auth_and_streams_private_image(
-    test_client, admin_headers, knowledge_database
+    test_client, admin_headers, standard_user, knowledge_database
 ):
-    """知识库图片代理：未登录不可访问，鉴权后可读取私有 bucket 图片"""
+    """知识库图片代理：匿名访问失败，具备 READ 范围的普通用户可以读取。"""
     from yuxi.storage.minio.client import MinIOClient, get_minio_client
 
     kb_id = knowledge_database["kb_id"]
@@ -636,6 +636,32 @@ async def test_kb_image_proxy_requires_auth_and_streams_private_image(
     assert authorized.status_code == 200, authorized.text
     assert authorized.content == image_bytes
     assert authorized.headers["content-type"].startswith("image/png")
+
+    shared_reader = await test_client.get(proxy_path, headers=standard_user["headers"])
+    assert shared_reader.status_code == 200, shared_reader.text
+    assert shared_reader.content == image_bytes
+
+    restrict_response = await test_client.put(
+        f"/api/knowledge/databases/{kb_id}",
+        json={
+            "name": knowledge_database["name"],
+            "description": knowledge_database.get("description") or "Pytest managed knowledge base",
+            "share_config": {
+                "version": 2,
+                "read_scope": {
+                    "access_level": "user",
+                    "department_ids": [],
+                    "user_uids": ["different-user"],
+                },
+                "manage_scope": None,
+            },
+        },
+        headers=admin_headers,
+    )
+    assert restrict_response.status_code == 200, restrict_response.text
+
+    out_of_scope = await test_client.get(proxy_path, headers=standard_user["headers"])
+    assert out_of_scope.status_code == 403, out_of_scope.text
 
 
 async def test_kb_image_proxy_rejects_invalid_or_missing_object(test_client, admin_headers, knowledge_database):

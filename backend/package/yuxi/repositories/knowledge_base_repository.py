@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.knowledge.cache import cache_kb_config, delete_cached_kb_config, kb_config_cache_lock
 from yuxi.storage.postgres.manager import pg_manager
@@ -18,7 +19,11 @@ class KnowledgeBaseRepository:
             )
             return [(str(kb_type or "unknown"), int(count or 0)) for kb_type, count in result.all()]
 
-    async def get_all(self) -> list[KnowledgeBase]:
+    async def get_all(self, *, db: AsyncSession | None = None) -> list[KnowledgeBase]:
+        if db is not None:
+            result = await db.execute(select(KnowledgeBase))
+            return list(result.scalars().all())
+
         async with pg_manager.get_async_session_context() as session:
             result = await session.execute(select(KnowledgeBase))
             return list(result.scalars().all())

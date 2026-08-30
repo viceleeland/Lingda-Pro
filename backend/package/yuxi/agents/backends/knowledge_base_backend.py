@@ -5,7 +5,12 @@ from typing import Any
 from yuxi.config.runtime import knowledge_capability_enabled
 
 
-async def resolve_visible_knowledge_bases_for_context(context) -> list[dict[str, Any]]:
+async def resolve_visible_knowledge_bases_for_context(
+    context,
+    *,
+    db: Any | None = None,
+    user: Any | None = None,
+) -> list[dict[str, Any]]:
     if not knowledge_capability_enabled():
         setattr(context, "_visible_knowledge_bases", [])
         return []
@@ -17,7 +22,11 @@ async def resolve_visible_knowledge_bases_for_context(context) -> list[dict[str,
         setattr(context, "_visible_knowledge_bases", [])
         return []
 
-    summaries = await knowledge_base.get_databases_by_uid(str(uid))
+    summaries = (
+        await knowledge_base.get_databases_by_user(user, db=db)
+        if db is not None and user is not None
+        else await knowledge_base.get_databases_by_uid(str(uid))
+    )
     databases = [
         {
             "kb_id": summary.kb_id,

@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import requests
 
 from yuxi.knowledge.parser.base import BaseDocumentProcessor, DocumentParserException
+from yuxi.knowledge.parser.pdf_visual import format_pdf_page_markdown
 from yuxi.storage.minio import get_minio_client
 from yuxi.utils import logger
 
@@ -57,7 +58,8 @@ class PaddleOCRAPIParser(BaseDocumentProcessor):
             )
 
         self._require_api_token()
-        params = params or {}
+        params = dict(params or {})
+        params["_source_file_extension"] = file_ext
         start_time = time.time()
 
         try:
@@ -296,14 +298,28 @@ class PaddleOCRPPOCRv6Parser(PaddleOCRAPIParser):
 
     def _extract_markdown(self, rows: list[dict[str, Any]], params: dict[str, Any]) -> str:
         lines: list[str] = []
+        page_blocks: list[str] = []
+        include_page_headings = (
+            params.get("_source_file_extension") == ".pdf" and bool(params.get("preserve_page_images"))
+        )
+        page_number = 0
 
         for row in rows:
             result = row.get("result") or {}
             for item in result.get("ocrResults") or []:
+                page_number += 1
                 pruned_result = item.get("prunedResult") or {}
                 rec_texts = pruned_result.get("rec_texts") or []
+                page_lines: list[str] = []
                 for text in rec_texts:
                     if isinstance(text, str) and text.strip():
-                        lines.append(text.strip())
+                        page_lines.append(text.strip())
 
+                if include_page_headings:
+                    page_blocks.append(format_pdf_page_markdown(page_number, "\n".join(page_lines)))
+                else:
+                    lines.extend(page_lines)
+
+        if include_page_headings:
+            return "\n\n".join(page_blocks).strip()
         return "\n".join(lines).strip()

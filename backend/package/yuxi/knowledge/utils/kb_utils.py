@@ -215,8 +215,8 @@ def build_kb_image_proxy_url(object_name: str) -> str:
     """构建知识库图片的后端鉴权代理 URL。
 
     图片存放在私有 bucket，前端通过该 URL 请求后端鉴权后读取图片。
-    对象名格式为 ``{kb_id}/kb-images/{timestamp}_{filename}``，kb_id 即首段；
-    路径参数只保留 ``kb-images/...`` 部分（保留斜杠、编码其余字符）。
+    对象名格式为 ``{kb_id}/kb-images/...``，kb_id 即首段；路径参数只保留
+    ``kb-images/...`` 部分（保留斜杠、编码其余字符）。
     """
     kb_id, separator, relative_path = object_name.partition("/")
     if not kb_id or not separator or not relative_path.startswith("kb-images/"):

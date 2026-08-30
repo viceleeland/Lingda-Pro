@@ -330,7 +330,13 @@ class DownloadKBFileInput(BaseModel):
     )
 
 
-@tool(category="knowledge", tags=["知识库"], display_name="下载知识库文件", args_schema=DownloadKBFileInput)
+@tool(
+    category="knowledge",
+    tags=["知识库"],
+    display_name="下载知识库文件",
+    args_schema=DownloadKBFileInput,
+    requires_workspace_runtime=True,
+)
 async def download_kb_file(
     kb_id: str,
     file_id: str,

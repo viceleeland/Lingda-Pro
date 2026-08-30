@@ -5,7 +5,7 @@
         <div class="disabled-content">
           <h4>知识图谱不可用</h4>
           <p>当前知识库类型 "{{ kbTypeLabel }}" 不支持知识图谱功能。</p>
-          <p>只有 Yuxi 类型的知识库支持知识图谱。</p>
+          <p>只有向量知识库支持知识图谱。</p>
         </div>
       </div>
       <div v-else class="graph-wrapper">
@@ -569,11 +569,14 @@ const startBuildStatusPoll = () => {
 
 watch(
   isBuildActive,
-  (active) => {
+  (active, wasActive) => {
     if (active) {
       startBuildStatusPoll()
     } else {
       stopBuildStatusPoll()
+      if (wasActive && graphBuildStatus.value?.build_task_status === 'completed') {
+        scheduleGraphLoad(0)
+      }
     }
   },
   { immediate: true }
@@ -706,16 +709,25 @@ const configureGraphBuild = async () => {
 
 const startGraphBuild = async () => {
   try {
-    const data = await graphBuildApi.startIndex(kbId.value)
+    const currentDatabaseId = kbId.value
+    const data = await graphBuildApi.startIndex(currentDatabaseId)
     message.success(data.message || '图谱构建任务已提交')
     if (data.task_id) {
       taskerStore.registerQueuedTask({
         task_id: data.task_id,
-        name: `图谱构建 (${kbId.value})`,
+        name: `图谱构建 (${currentDatabaseId})`,
         task_type: GRAPH_BUILD_TASK_TYPE,
         message: data.message,
-        payload: { kb_id: kbId.value }
+        payload: { kb_id: currentDatabaseId }
       })
+    }
+    if (currentDatabaseId === kbId.value) {
+      // Task 已持久化为排队状态；先投影 pending，确保极速完成也经历 active → completed 刷新。
+      graphBuildStatus.value = {
+        ...(graphBuildStatus.value || {}),
+        build_task_status: 'pending',
+        build_task_progress: 0
+      }
     }
     await loadGraphBuildStatus()
   } catch (e) {

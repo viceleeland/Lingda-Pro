@@ -80,9 +80,7 @@
                     </span>
                   </div>
 
-                  <div class="result-content">
-                    {{ chunk.content }}
-                  </div>
+                  <MarkdownPreview :content="chunk.content || ''" class="result-content" />
 
                   <div class="result-metadata">
                     <span v-if="chunk.metadata?.source" class="metadata-item">
@@ -161,6 +159,7 @@ import { message } from 'ant-design-vue'
 import { queryApi } from '@/apis/knowledge_api'
 import { SearchOutlined } from '@ant-design/icons-vue'
 import { Braces, RefreshCw } from '@lucide/vue'
+import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 
 const store = useDatabaseStore()
 const MAX_VISIBLE_EXAMPLES = 10
@@ -587,8 +586,18 @@ defineExpose({
         line-height: 1.6;
         font-size: 13px;
         color: var(--gray-900);
-        white-space: pre-wrap;
         word-break: break-word;
+
+        :deep(img) {
+          display: block;
+          max-width: 100%;
+          max-height: 520px;
+          margin: 8px 0;
+          object-fit: contain;
+          border: 1px solid var(--gray-150);
+          border-radius: 6px;
+          background: var(--gray-0);
+        }
       }
 
       .result-metadata {

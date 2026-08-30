@@ -15,9 +15,13 @@ from PIL import Image
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from yuxi.knowledge.parser.base import DocumentParserException
+from yuxi.knowledge.parser.deepseek_ocr import DeepSeekOCRParser, DeepSeekVisionParser
 from yuxi.knowledge.parser.factory import DocumentProcessorFactory
 from yuxi.knowledge.parser.mineru import MinerUParser
 from yuxi.knowledge.parser.mineru_official import MinerUOfficialParser
+from yuxi.knowledge.parser.pdf_visual import is_visual_page, page_has_raster_image
+from yuxi.knowledge.parser.pp_structure_v3 import PPStructureV3Parser
 from yuxi.knowledge.parser.rapid_ocr import RapidOCRParser
 from yuxi.knowledge.parser.registry import PROCESSOR_TYPES, get_parser_metadata
 from yuxi.services.ocr_service import parse_document
@@ -128,6 +132,28 @@ def _build_pdf(file_path: Path, text: str) -> None:
     resources = DictionaryObject()
     resources[NameObject("/Font")] = DictionaryObject({NameObject("/F1"): font})
     page[NameObject("/Resources")] = writer._add_object(resources)
+    writer.write(str(file_path))
+
+
+def _build_two_page_pdf(file_path: Path, first_text: str, second_text: str) -> None:
+    writer = PdfWriter()
+    for text in (first_text, second_text):
+        page = writer.add_blank_page(width=595, height=842)
+        escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        stream = DecodedStreamObject()
+        stream.set_data(f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode())
+        page[NameObject("/Contents")] = writer._add_object(stream)
+        font = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject("/Helvetica"),
+                NameObject("/Encoding"): NameObject("/WinAnsiEncoding"),
+            }
+        )
+        resources = DictionaryObject()
+        resources[NameObject("/Font")] = DictionaryObject({NameObject("/F1"): font})
+        page[NameObject("/Resources")] = writer._add_object(resources)
     writer.write(str(file_path))
 
 
@@ -405,6 +431,392 @@ def test_parse_pdf_keeps_explicit_disable_when_default_ocr_enabled(
     result = parser_unified.parse_pdf(str(file_path), params={"ocr_engine": "disable"})
 
     assert "Parser PDF content" in result
+
+
+def test_pdfreader_preserves_searchable_visual_page_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "visual.pdf"
+    _build_pdf(file_path, "Figure 7 Stress contour")
+    uploaded: list[tuple[bytes, str, str, str]] = []
+
+    def _fake_upload(data, filename, bucket_name, object_prefix, *, stable_name=False):
+        uploaded.append((data, filename, bucket_name, object_prefix))
+        assert stable_name is True
+        return "/api/knowledge/databases/kb-1/images/kb-images/pdf-pages/page_0001.png"
+
+    monkeypatch.setattr(parser_unified, "_upload_image_to_minio", _fake_upload)
+
+    markdown = parser_unified.pdfreader(
+        file_path,
+        params={
+            "preserve_page_images": True,
+            "image_bucket": "kb-images",
+            "image_prefix": "kb-1/kb-images",
+        },
+    )
+
+    assert "## Page 1" in markdown
+    assert "![Figure 7 Stress contour]" in markdown
+    assert "Figure 7 Stress contour" in markdown
+    assert uploaded[0][1:] == ("page_0001.png", "kb-images", "kb-1/kb-images/pdf-pages")
+    assert uploaded[0][0].startswith(b"\x89PNG")
+
+
+def test_pdfreader_preserves_english_table_page_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "table.pdf"
+    _build_pdf(file_path, "Table 18 PEEQ RF S")
+    uploaded: list[str] = []
+
+    def _fake_upload(data, filename, bucket_name, object_prefix, *, stable_name=False):
+        del data, bucket_name, object_prefix
+        assert stable_name is True
+        uploaded.append(filename)
+        return "/api/knowledge/databases/kb-1/images/kb-images/pdf-pages/page_0001.png"
+
+    monkeypatch.setattr(parser_unified, "_upload_image_to_minio", _fake_upload)
+
+    markdown = parser_unified.pdfreader(
+        file_path,
+        params={
+            "preserve_page_images": True,
+            "image_bucket": "kb-images",
+            "image_prefix": "kb-1/kb-images",
+        },
+    )
+
+    assert "![Table 18 PEEQ RF S]" in markdown
+    assert uploaded == ["page_0001.png"]
+
+
+def test_pdfreader_does_not_render_plain_text_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "plain.pdf"
+    _build_pdf(file_path, "Plain text only")
+    monkeypatch.setattr(
+        parser_unified,
+        "_upload_image_to_minio",
+        lambda *args, **kwargs: pytest.fail("plain page should not be rendered"),
+    )
+
+    markdown = parser_unified.pdfreader(file_path, params={"preserve_page_images": True})
+
+    assert markdown == "## Page 1\n\nPlain text only"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Figure out the next step",
+        "Table of contents",
+        "表明该方法可以工作",
+        "图书馆开放时间",
+    ],
+)
+def test_visual_page_caption_detection_rejects_plain_prose(text: str) -> None:
+    page = SimpleNamespace(get=lambda key: None)
+
+    assert is_visual_page(text, page) is False
+
+
+@pytest.mark.parametrize(
+    "caption",
+    [
+        "Figure A-2 Stress contour",
+        "Fig. IV Mesh detail",
+        "Table 3.1 Material properties",
+        "图 2-1 接触示意图",
+        "表三 材料参数",
+    ],
+)
+def test_visual_page_caption_detection_accepts_numbered_captions(caption: str) -> None:
+    page = SimpleNamespace(get=lambda key: None)
+
+    assert is_visual_page(caption, page) is True
+
+
+def test_visual_page_detects_raster_image_nested_in_form_xobject() -> None:
+    class PdfObject(dict):
+        def get_object(self):
+            return self
+
+    image = PdfObject({"/Subtype": "/Image"})
+    form = PdfObject(
+        {
+            "/Subtype": "/Form",
+            "/Resources": PdfObject({"/XObject": PdfObject({"/Im1": image})}),
+        }
+    )
+    page = PdfObject({"/Resources": PdfObject({"/XObject": PdfObject({"/Fm1": form})})})
+
+    assert page_has_raster_image(page) is True
+
+
+def test_pdf_visual_render_scale_caps_pixel_area_and_dimensions() -> None:
+    normal_scale = parser_unified._bounded_pdf_render_scale(595, 842, 144)
+    huge_scale = parser_unified._bounded_pdf_render_scale(50_000, 50_000, 144)
+    panoramic_scale = parser_unified._bounded_pdf_render_scale(100_000, 100, 144)
+
+    assert normal_scale == pytest.approx(2.0)
+    assert 50_000 * huge_scale <= parser_unified._PDF_PAGE_RENDER_MAX_DIMENSION
+    assert (50_000 * huge_scale) ** 2 <= parser_unified._PDF_PAGE_RENDER_MAX_PIXELS
+    assert 100_000 * panoramic_scale <= parser_unified._PDF_PAGE_RENDER_MAX_DIMENSION
+
+
+def test_pdfreader_reports_page_image_upload_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "visual-upload-error.pdf"
+    _build_pdf(file_path, "Figure 3 Failure path")
+
+    def _raise_upload_error(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("minio unavailable")
+
+    monkeypatch.setattr(parser_unified, "_upload_image_to_minio", _raise_upload_error)
+
+    with pytest.raises(DocumentParserException) as exc_info:
+        parser_unified.pdfreader(file_path, params={"preserve_page_images": True})
+
+    assert exc_info.value.service_name == "pdf_visual"
+    assert exc_info.value.status_code == "page_image_failed"
+    assert "page=1" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("ocr_engine", ["rapid_ocr", "pp_structure_v3_ocr"])
+def test_text_only_ocr_appends_visual_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ocr_engine: str,
+) -> None:
+    file_path = tmp_path / "ocr_visual.pdf"
+    _build_pdf(file_path, "Figure 9 Contact force diagram")
+    monkeypatch.setattr(
+        DocumentProcessorFactory,
+        "process_file",
+        lambda *args, **kwargs: "OCR text",
+    )
+    monkeypatch.setattr(
+        parser_unified,
+        "_upload_image_to_minio",
+        lambda *args, **kwargs: "/api/knowledge/databases/kb-1/images/kb-images/pdf-pages/page_0001.png",
+    )
+
+    markdown = parser_unified.parse_pdf(
+        str(file_path),
+        params={
+            "ocr_engine": ocr_engine,
+            "preserve_page_images": True,
+            "image_bucket": "kb-images",
+            "image_prefix": "kb-1/kb-images",
+        },
+    )
+
+    assert markdown.startswith("OCR text\n\n# Visual pages\n\n## Page 1")
+    assert "![Figure 9 Contact force diagram]" in markdown
+    assert markdown.endswith("Figure 9 Contact force diagram")
+
+
+def test_rapid_ocr_preserves_pdf_page_boundaries_for_page_images(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "rapid-pages.pdf"
+    _build_two_page_pdf(file_path, "source one", "source two")
+    parser = RapidOCRParser()
+    page_texts = iter(["## Page 99\n\nOCR page one", "OCR page two"])
+    monkeypatch.setattr(parser, "process_image", lambda image: next(page_texts))
+
+    markdown = parser.process_pdf(str(file_path), {"preserve_page_images": True})
+
+    assert markdown == "## Page 1\n\nOCR page one\n\n## Page 2\n\nOCR page two"
+
+
+def test_deepseek_ocr_preserves_pdf_page_boundaries_for_page_images(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "deepseek-pages.pdf"
+    _build_two_page_pdf(file_path, "source one", "source two")
+    parser = DeepSeekOCRParser(api_key="test-key")
+    page_texts = iter(["OCR page one", "OCR page two"])
+    monkeypatch.setattr(parser, "_call_api", lambda *args, **kwargs: next(page_texts))
+
+    markdown = parser._process_pdf(str(file_path), {"preserve_page_images": True})
+
+    assert markdown == "## Page 1\n\nOCR page one\n\n## Page 2\n\nOCR page two"
+
+
+def test_pp_structure_preserves_pdf_page_boundaries_for_page_images() -> None:
+    parser = PPStructureV3Parser(server_url="http://paddlex.test")
+    api_result = {
+        "result": {
+            "layoutParsingResults": [
+                {"markdown": {"text": "OCR page one"}},
+                {"markdown": {"text": "OCR page two"}},
+            ]
+        }
+    }
+
+    result = parser._parse_api_result(
+        api_result,
+        "manual.pdf",
+        include_page_headings=True,
+    )
+
+    assert result["full_text"] == "## Page 1\n\nOCR page one\n\n## Page 2\n\nOCR page two"
+
+
+@pytest.mark.parametrize(
+    "ocr_engine",
+    ["rapid_ocr", "pp_structure_v3_ocr", "deepseek_ocr", "paddleocr_pp_ocrv6"],
+)
+def test_text_only_ocr_binds_page_image_to_same_ocr_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ocr_engine: str,
+) -> None:
+    file_path = tmp_path / "ocr-page-bound.pdf"
+    _build_two_page_pdf(file_path, "Plain introduction", "Figure 2 Stress contour")
+    ocr_markdown = "## Page 1\n\nOCR introduction\n\n## Page 2\n\nOCR stress results"
+    monkeypatch.setattr(
+        DocumentProcessorFactory,
+        "process_file",
+        lambda *args, **kwargs: ocr_markdown,
+    )
+    image_url = (
+        "/api/knowledge/databases/kb-1/images/"
+        "kb-images/file-1/pdf-pages/page_0002.png"
+    )
+    image_markdown = f"![Figure 2 Stress contour]({image_url})"
+    monkeypatch.setattr(
+        parser_unified,
+        "_upload_image_to_minio",
+        lambda *args, **kwargs: image_url,
+    )
+
+    markdown = parser_unified.parse_pdf(
+        str(file_path),
+        params={
+            "ocr_engine": ocr_engine,
+            "preserve_page_images": True,
+            "image_bucket": "kb-images",
+            "image_prefix": "kb-1/kb-images/file-1",
+        },
+    )
+
+    page_one, page_two = markdown.split("## Page 2", 1)
+    assert "# Visual pages" not in markdown
+    assert image_markdown not in page_one
+    assert page_two.startswith(f"\n\n{image_markdown}\n\nOCR stress results")
+
+
+def test_deepseek_vision_only_calls_visual_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "vision.pdf"
+    _build_two_page_pdf(file_path, "Plain introduction", "Figure 2 Stress contour")
+    parser = DeepSeekVisionParser(api_key="test-key")
+    calls: list[bytes] = []
+
+    def _fake_call_api(data_bytes, mime_type, params):
+        calls.append(data_bytes)
+        assert mime_type == "image/png"
+        return "A colored stress contour plot."
+
+    monkeypatch.setattr(parser, "_call_api", _fake_call_api)
+
+    markdown = parser._process_pdf(str(file_path), {})
+
+    assert len(calls) == 1
+    assert calls[0].startswith(b"\x89PNG")
+    assert "## Page 1\n\nPlain introduction" in markdown
+    assert "## Page 2\n\nFigure 2 Stress contour" in markdown
+    assert "### Visual description\n\nA colored stress contour plot." in markdown
+
+
+def test_deepseek_vision_uses_official_multimodal_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    parser = DeepSeekVisionParser(api_key="test-key")
+    captured = {}
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {"content": "visual markdown"}}]}
+
+    def _post(url, headers, json, timeout):
+        captured.update({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        return Response()
+
+    monkeypatch.setattr("yuxi.knowledge.parser.deepseek_ocr.requests.post", _post)
+
+    result = parser._call_api(b"image", "image/png", {})
+
+    assert result == "visual markdown"
+    assert captured["url"] == "https://api.deepseek.com/chat/completions"
+    assert captured["json"]["model"] == "deepseek-v4-flash-vision-exp"
+    assert captured["json"]["thinking"] == {"type": "disabled"}
+    prompt = captured["json"]["messages"][0]["content"][1]["text"]
+    assert "<image>" not in prompt
+    assert "visual description" in prompt
+
+
+def test_deepseek_vision_parse_binds_page_image_to_same_page_description(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "vision-bound.pdf"
+    _build_two_page_pdf(file_path, "Plain introduction", "Figure 2 Stress contour")
+    vision_markdown = (
+        "## Page 1\n\nPlain introduction\n\n"
+        "## Page 2\n\nFigure 2 Stress contour\n\n"
+        "### Visual description\n\nA colored stress contour plot."
+    )
+    monkeypatch.setattr(
+        DocumentProcessorFactory,
+        "process_file",
+        lambda *args, **kwargs: vision_markdown,
+    )
+    monkeypatch.setattr(
+        parser_unified,
+        "_upload_image_to_minio",
+        lambda *args, **kwargs: (
+            "/api/knowledge/databases/kb-1/images/"
+            "kb-images/file-1/pdf-pages/page_0002.png"
+        ),
+    )
+
+    markdown = parser_unified.parse_pdf(
+        str(file_path),
+        params={
+            "ocr_engine": "deepseek_vision",
+            "preserve_page_images": True,
+            "image_bucket": "kb-images",
+            "image_prefix": "kb-1/kb-images/file-1",
+        },
+    )
+
+    page_two = markdown.split("## Page 2", 1)[1]
+    image_markdown = (
+        "![Figure 2 Stress contour](/api/knowledge/databases/kb-1/images/"
+        "kb-images/file-1/pdf-pages/page_0002.png)"
+    )
+    after_image = page_two.split(image_markdown, 1)[1]
+    assert "# Visual pages" not in markdown
+    assert page_two.startswith(f"\n\n{image_markdown}")
+    assert after_image.index("Figure 2 Stress contour") < after_image.index("### Visual description")
+    assert "A colored stress contour plot." in page_two
 
 
 def test_rapid_ocr_resolves_model_dir_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

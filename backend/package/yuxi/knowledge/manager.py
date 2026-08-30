@@ -304,12 +304,12 @@ class KnowledgeBaseManager:
             **normalized_stats,
         }
 
-    async def get_databases(self) -> list[KnowledgeBaseSummary]:
+    async def get_databases(self, *, db: Any | None = None) -> list[KnowledgeBaseSummary]:
         """获取所有知识库摘要。"""
         from yuxi.repositories.knowledge_base_repository import KnowledgeBaseRepository
 
         kb_repo = KnowledgeBaseRepository()
-        rows = await kb_repo.get_all()
+        rows = await kb_repo.get_all(db=db)
         all_databases: list[KnowledgeBaseSummary] = []
         for row in rows:
             kb_type = row.kb_type or "milvus"
@@ -391,7 +391,12 @@ class KnowledgeBaseManager:
             return []
         return await self.get_databases_by_user(user)
 
-    async def get_databases_by_user(self, user: User | dict) -> list[KnowledgeBaseSummary]:
+    async def get_databases_by_user(
+        self,
+        user: User | dict,
+        *,
+        db: Any | None = None,
+    ) -> list[KnowledgeBaseSummary]:
         """根据用户权限获取知识库列表"""
 
         # 构建用户信息字典（支持 User 对象或 dict）
@@ -408,7 +413,7 @@ class KnowledgeBaseManager:
         user_dept = user_info.get("department_id")
         logger.info(f"Getting databases for user with role {user_role} and department {user_dept}")
 
-        all_databases = await self.get_databases()
+        all_databases = await self.get_databases(db=db)
 
         # 超级管理员可以看到所有知识库
         filtered_databases: list[KnowledgeBaseSummary] = []

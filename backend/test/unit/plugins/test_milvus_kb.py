@@ -373,6 +373,77 @@ async def test_index_file_persists_chunk_stats(monkeypatch):
     assert file_repo.update_calls[-1][2]["status"] == FileStatus.INDEXED
 
 
+async def test_parse_file_uses_file_owned_image_prefix_and_cleans_stale_pages(monkeypatch):
+    kb = MilvusKB.__new__(MilvusKB)
+    file_repo = FakeKnowledgeFileRepository(
+        {
+            "file-1": make_file_record(
+                filename="manual.pdf",
+                file_type="pdf",
+                markdown_file=None,
+                status=FileStatus.UPLOADED,
+            )
+        }
+    )
+    patch_file_repository(monkeypatch, file_repo)
+    parse_params = []
+    cleanup_calls = []
+
+    async def parse_document(source, params):
+        parse_params.append((source, dict(params)))
+        return "## Page 1\n\npage body"
+
+    async def save_markdown(kb_id, file_id, markdown):
+        return f"minio://parsed/{kb_id}/{file_id}.md"
+
+    async def cleanup_page_images(kb_id, file_id, markdown):
+        cleanup_calls.append((kb_id, file_id, markdown))
+
+    monkeypatch.setattr("yuxi.services.ocr_service.parse_document", parse_document)
+    kb._save_markdown_to_minio = save_markdown
+    kb._cleanup_stale_pdf_page_images = cleanup_page_images
+
+    result = await kb.parse_file("db", "file-1", additional_params={})
+
+    assert parse_params[0][1]["image_prefix"] == "db/kb-images/file-1"
+    assert cleanup_calls == [("db", "file-1", "## Page 1\n\npage body")]
+    assert result["status"] == FileStatus.PARSED
+    assert file_repo.records["file-1"].status == FileStatus.PARSED
+
+
+async def test_pdf_page_image_failure_marks_file_error_parsing(monkeypatch):
+    from yuxi.knowledge.parser.base import DocumentParserException
+
+    kb = MilvusKB.__new__(MilvusKB)
+    file_repo = FakeKnowledgeFileRepository(
+        {
+            "file-1": make_file_record(
+                filename="manual.pdf",
+                file_type="pdf",
+                markdown_file=None,
+                status=FileStatus.UPLOADED,
+            )
+        }
+    )
+    patch_file_repository(monkeypatch, file_repo)
+
+    async def parse_document(source, params):
+        raise DocumentParserException(
+            "PDF 页图生成失败: page=2, error=minio unavailable",
+            "pdf_visual",
+            "page_image_failed",
+        )
+
+    monkeypatch.setattr("yuxi.services.ocr_service.parse_document", parse_document)
+
+    with pytest.raises(DocumentParserException, match="page=2"):
+        await kb.parse_file("db", "file-1", additional_params={})
+
+    record = file_repo.records["file-1"]
+    assert record.status == FileStatus.ERROR_PARSING
+    assert record.error_message.startswith("[pdf_visual] PDF 页图生成失败")
+
+
 @pytest.mark.parametrize(
     ("operation", "expected_status", "expected_message"),
     [
@@ -553,13 +624,122 @@ async def test_insert_chunks_to_stores_rolls_back_file_when_milvus_insert_fails(
     assert milvus_delete_calls == [(collection, "file-1")]
 
 
+async def test_pdf_page_image_reparse_cleanup_keeps_current_and_other_file_objects(monkeypatch):
+    kb = MilvusKB.__new__(MilvusKB)
+    current = "db/kb-images/file-1/pdf-pages/page_0001.png"
+    stale = "db/kb-images/file-1/pdf-pages/page_0002.png"
+    other_file = "db/kb-images/file-2/pdf-pages/page_0001.png"
+
+    class FakeMinioClient:
+        KB_BUCKETS = {"images": "kb-images"}
+
+        def __init__(self):
+            self.deleted = []
+            self.objects = {current, stale, other_file}
+            self.ensured = []
+
+        def ensure_bucket_exists(self, bucket_name):
+            self.ensured.append(bucket_name)
+            return True
+
+        async def alist_object_metadata(self, bucket_name, prefix):
+            assert (bucket_name, prefix) == ("kb-images", "db/kb-images/file-1/pdf-pages/")
+            return [{"object_name": name} for name in self.objects if name.startswith(prefix)]
+
+        async def adelete_file(self, bucket_name, object_name):
+            self.deleted.append((bucket_name, object_name))
+            self.objects.remove(object_name)
+            return True
+
+    minio_client = FakeMinioClient()
+    monkeypatch.setattr("yuxi.storage.minio.get_minio_client", lambda: minio_client)
+    markdown = (
+        "![Figure 1](/api/knowledge/databases/db/images/"
+        "kb-images/file-1/pdf-pages/page_0001.png)"
+    )
+
+    await kb._cleanup_stale_pdf_page_images("db", "file-1", markdown)
+
+    assert minio_client.ensured == ["kb-images"]
+    assert minio_client.deleted == [("kb-images", stale)]
+    assert minio_client.objects == {current, other_file}
+
+
+async def test_delete_file_image_objects_does_not_touch_other_files(monkeypatch):
+    kb = MilvusKB.__new__(MilvusKB)
+    target_page = "db/kb-images/file-1/pdf-pages/page_0001.png"
+    target_asset = "db/kb-images/file-1/diagram.png"
+    other_file = "db/kb-images/file-2/pdf-pages/page_0001.png"
+    other_kb = "db-2/kb-images/file-1/pdf-pages/page_0001.png"
+
+    class FakeMinioClient:
+        KB_BUCKETS = {"images": "kb-images"}
+
+        def __init__(self):
+            self.objects = {target_page, target_asset, other_file, other_kb}
+            self.prefixes = []
+            self.ensured = []
+
+        def ensure_bucket_exists(self, bucket_name):
+            self.ensured.append(bucket_name)
+            return True
+
+        async def adelete_objects_by_prefix(self, bucket_name, prefix):
+            self.prefixes.append((bucket_name, prefix))
+            removed = {name for name in self.objects if name.startswith(prefix)}
+            self.objects -= removed
+            return len(removed)
+
+    minio_client = FakeMinioClient()
+    monkeypatch.setattr("yuxi.storage.minio.get_minio_client", lambda: minio_client)
+
+    await kb._delete_file_image_objects("db", "file-1")
+
+    assert minio_client.ensured == ["kb-images"]
+    assert minio_client.prefixes == [("kb-images", "db/kb-images/file-1/")]
+    assert minio_client.objects == {other_file, other_kb}
+
+
+async def test_delete_file_removes_file_owned_image_prefix(monkeypatch):
+    kb = MilvusKB.__new__(MilvusKB)
+    file_repo = FakeKnowledgeFileRepository({"file-1": make_file_record()})
+    patch_file_repository(monkeypatch, file_repo)
+    calls = []
+
+    async def delete_chunks(kb_id, file_id):
+        calls.append(("chunks", kb_id, file_id))
+
+    async def delete_images(kb_id, file_id):
+        calls.append(("images", kb_id, file_id))
+
+    kb.delete_file_chunks_only = delete_chunks
+    kb._delete_file_image_objects = delete_images
+
+    await kb.delete_file("db", "file-1")
+
+    assert calls == [("chunks", "db", "file-1"), ("images", "db", "file-1")]
+    assert file_repo.deleted == ["file-1"]
+
+
 async def test_update_content_uses_streaming_chunk_store(monkeypatch):
     kb = MilvusKB.__new__(MilvusKB)
-    file_repo = FakeKnowledgeFileRepository({"file-1": make_file_record(markdown_file=None, status=FileStatus.INDEXED)})
+    file_repo = FakeKnowledgeFileRepository(
+        {
+            "file-1": make_file_record(
+                filename="manual.pdf",
+                file_type="pdf",
+                markdown_file=None,
+                status=FileStatus.INDEXED,
+            )
+        }
+    )
     patch_file_repository(monkeypatch, file_repo)
     collection = FakeCollection()
     deleted_files = []
     store_calls = []
+    parse_params = []
+    saved_markdown = []
+    cleaned_markdown = []
 
     async def get_collection(kb_id, embedding_model_spec):
         del kb_id, embedding_model_spec
@@ -575,13 +755,23 @@ async def test_update_content_uses_streaming_chunk_store(monkeypatch):
         store_calls.append((kb_id, file_id, collection_arg, list(chunks), embedding_function))
 
     async def parse_file(source, params):
+        parse_params.append(dict(params))
         return "# markdown"
+
+    async def save_markdown(kb_id, file_id, markdown):
+        saved_markdown.append((kb_id, file_id, markdown))
+        return "minio://parsed/db/file-1.md"
+
+    async def cleanup_page_images(kb_id, file_id, markdown):
+        cleaned_markdown.append((kb_id, file_id, markdown))
 
     kb._get_or_create_milvus_collection = get_collection
     kb._get_embedding_function = lambda embedding_model_spec: forbidden_embedding
     kb._split_text_into_chunks = lambda text, file_id, filename, params: [make_chunk(0), make_chunk(1)]
     kb.delete_file_chunks_only = delete_file_chunks_only
     kb._embed_and_store_chunks = embed_and_store_chunks
+    kb._save_markdown_to_minio = save_markdown
+    kb._cleanup_stale_pdf_page_images = cleanup_page_images
     monkeypatch.setattr("yuxi.knowledge.implementations.milvus.parse_document", parse_file)
 
     async def get_system_options(_option, _db=None):
@@ -601,8 +791,12 @@ async def test_update_content_uses_streaming_chunk_store(monkeypatch):
     assert store_calls[0][2] is collection
     assert [chunk["chunk_id"] for chunk in store_calls[0][3]] == ["chunk-0", "chunk-1"]
     assert store_calls[0][4] is forbidden_embedding
+    assert parse_params[0]["image_prefix"] == "db/kb-images/file-1"
+    assert saved_markdown == [("db", "file-1", "# markdown")]
+    assert cleaned_markdown == [("db", "file-1", "# markdown")]
     assert result[0]["status"] == FileStatus.INDEXED
     assert file_repo.records["file-1"].status == FileStatus.INDEXED
+    assert file_repo.records["file-1"].markdown_file == "minio://parsed/db/file-1.md"
     assert file_repo.update_calls[0][2]["status"] == FileStatus.INDEXING
     assert file_repo.update_calls[-1][2]["status"] == FileStatus.INDEXED
 

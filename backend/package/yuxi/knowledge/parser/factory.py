@@ -52,6 +52,7 @@ class DocumentProcessorFactory:
                 - "mineru_official": MinerU 官方云服务 API 文档解析
                 - "pp_structure_v3_ocr": PP-Structure-V3 版面解析
                 - "deepseek_ocr": DeepSeek-OCR SiliconFlow API
+                - "deepseek_vision": DeepSeek 官方视觉 API
                 - "paddleocr_vl_1_6": PaddleOCR-VL-1.6 云端 API 文档解析
                 - "paddleocr_pp_ocrv6": PP-OCRv6 云端 API 文字识别
             **kwargs: 处理器初始化参数

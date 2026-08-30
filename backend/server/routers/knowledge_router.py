@@ -1702,8 +1702,9 @@ async def download_document(kb_id: str, doc_id: str, current_user: User = Depend
 
 
 @knowledge.get("/databases/{kb_id}/images/{object_path:path}")
-async def get_kb_image(kb_id: str, object_path: str, current_user: User = Depends(require_knowledge_base_read)):
+async def get_kb_image(kb_id: str, object_path: str, current_user: User = Depends(get_required_user)):
     """经鉴权代理读取知识库图片（图片存放在私有 bucket，禁止匿名访问）"""
+    await _ensure_database_permission(kb_id, current_user, ResourcePermission.READ)
     if not object_path.startswith("kb-images/"):
         raise HTTPException(status_code=400, detail="非法的知识库图片路径")
     if ".." in object_path or "\\" in object_path:
