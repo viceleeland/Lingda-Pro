@@ -30,18 +30,82 @@ def _database_detail(**stats) -> KnowledgeBaseDetail:
 class FakeTaskContext:
     def __init__(self):
         self.result = None
+        self.progress = None
+        self.progress_message = None
 
     async def set_message(self, message: str) -> None:
         return None
 
     async def set_progress(self, progress: float, message: str | None = None) -> None:
-        return None
+        self.progress = progress
+        self.progress_message = message
 
     async def set_result(self, result: dict) -> None:
         self.result = result
 
     async def raise_if_cancelled(self) -> None:
         return None
+
+
+async def test_document_action_failure_preserves_result_and_raises_terminal_error():
+    context = FakeTaskContext()
+    result_payload = {
+        "items": [{"file_id": "file_1", "status": "failed", "error": "provider unavailable"}],
+        "processed": 1,
+        "failed": 1,
+    }
+
+    with pytest.raises(RuntimeError, match="解析完成，失败 1 个"):
+        await knowledge_router._finish_document_action_task(
+            context,
+            result_payload=result_payload,
+            message="解析完成，失败 1 个",
+            failed_count=1,
+        )
+
+    assert context.result == result_payload
+    assert context.progress == 100.0
+    assert context.progress_message == "解析完成，失败 1 个"
+
+
+async def test_document_action_success_returns_persisted_result():
+    context = FakeTaskContext()
+    result_payload = {"items": [{"file_id": "file_1", "status": "indexed"}], "processed": 1, "failed": 0}
+
+    result = await knowledge_router._finish_document_action_task(
+        context,
+        result_payload=result_payload,
+        message="入库完成，失败 0 个",
+        failed_count=0,
+    )
+
+    assert result == result_payload
+    assert context.result == result_payload
+    assert context.progress == 100.0
+    assert context.progress_message == "入库完成，失败 0 个"
+
+
+async def test_parse_file_failure_marks_document_action_terminal(monkeypatch):
+    context = FakeTaskContext()
+
+    async def fail_parse_file(kb_id: str, file_id: str, operator_id: str | None = None):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(knowledge_router.knowledge_base, "parse_file", fail_parse_file)
+
+    with pytest.raises(RuntimeError, match="解析完成，失败 1 个"):
+        await knowledge_router._run_parse_file_ids(
+            context=context,
+            kb_id="kb_1",
+            file_ids=["file_1"],
+            operator_id="uid-user",
+        )
+
+    assert context.result == {
+        "items": [{"file_id": "file_1", "status": "failed", "error": "provider unavailable"}],
+        "processed": 1,
+        "failed": 1,
+    }
 
 
 async def test_document_file_exists_returns_boolean_for_relative_path(monkeypatch):

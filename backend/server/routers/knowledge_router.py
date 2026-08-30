@@ -1032,6 +1032,22 @@ def _is_failed_item(item: dict) -> bool:
     return item.get("status") == "failed" or bool(item.get("error"))
 
 
+async def _finish_document_action_task(
+    context: TaskContext,
+    *,
+    result_payload: dict,
+    message: str,
+    failed_count: int,
+) -> dict:
+    """持久化文档任务结果，并让部分失败进入真实失败终态。"""
+
+    await context.set_result(result_payload)
+    await context.set_progress(100.0, message)
+    if failed_count:
+        raise RuntimeError(message)
+    return result_payload
+
+
 async def _run_parse_file_ids(
     *,
     context: TaskContext,
@@ -1076,9 +1092,12 @@ async def _run_parse_file_ids(
     failed_count = len([p for p in processed_items if _is_failed_item(p)])
     message = f"解析完成，失败 {failed_count} 个"
     result_payload = {"items": processed_items, "processed": len(processed_items), "failed": failed_count}
-    await context.set_result(result_payload)
-    await context.set_progress(100.0, message)
-    return result_payload
+    return await _finish_document_action_task(
+        context,
+        result_payload=result_payload,
+        message=message,
+        failed_count=failed_count,
+    )
 
 
 async def _run_index_file_ids(
@@ -1125,9 +1144,12 @@ async def _run_index_file_ids(
     failed_count = len([p for p in processed_items if _is_failed_item(p)])
     message = f"入库完成，失败 {failed_count} 个"
     result_payload = {"items": processed_items, "processed": len(processed_items), "failed": failed_count}
-    await context.set_result(result_payload)
-    await context.set_progress(100.0, message)
-    return result_payload
+    return await _finish_document_action_task(
+        context,
+        result_payload=result_payload,
+        message=message,
+        failed_count=failed_count,
+    )
 
 
 async def _run_parse_pending_statuses(
@@ -1190,9 +1212,12 @@ async def _run_parse_pending_statuses(
         "failed": failed_count,
         "result_truncated": processed_count > len(result_items),
     }
-    await context.set_result(result_payload)
-    await context.set_progress(100.0, message)
-    return result_payload
+    return await _finish_document_action_task(
+        context,
+        result_payload=result_payload,
+        message=message,
+        failed_count=failed_count,
+    )
 
 
 async def _run_index_pending_statuses(
@@ -1250,9 +1275,12 @@ async def _run_index_pending_statuses(
         "failed": failed_count,
         "result_truncated": processed_count > len(result_items),
     }
-    await context.set_result(result_payload)
-    await context.set_progress(100.0, message)
-    return result_payload
+    return await _finish_document_action_task(
+        context,
+        result_payload=result_payload,
+        message=message,
+        failed_count=failed_count,
+    )
 
 
 async def _enqueue_parse_task(
