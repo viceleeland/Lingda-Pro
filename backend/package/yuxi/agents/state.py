@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, TypedDict
 
-from langchain.agents import AgentState
+from deepagents.middleware.filesystem import FilesystemState
 
 
 def merge_artifacts(existing: list[str] | None, new: list[str] | None) -> list[str]:
@@ -16,7 +16,7 @@ def merge_artifacts(existing: list[str] | None, new: list[str] | None) -> list[s
     return list(dict.fromkeys(existing + new))
 
 
-class BaseState(AgentState):
+class BaseState(FilesystemState):
     """Shared state fields for Yuxi agents."""
 
     artifacts: Annotated[list[str], merge_artifacts]

@@ -917,8 +917,8 @@ const steeringRequestIds = reactive(new Set())
 let sendCooldownTimer = null
 // 预设的打招呼文本
 const greetingMessages = [
-  '语析，析万物之语',
-  '语析，与知识对话',
+  '灵答，让知识触手可及',
+  '灵答，与知识对话',
   '答案藏在知识里，我来找',
   '与知识对话，与答案相遇',
   '你负责提问，我负责寻找'
@@ -2254,8 +2254,11 @@ const queuePausedMessage = computed(() =>
     ? '当前任务已停止，后续队列已暂停。'
     : '上一个任务失败，后续队列已暂停。'
 )
+const canStopActiveRun = computed(
+  () => isStreaming.value && currentThreadState.value?.responseCompleted !== true
+)
 const shouldShowStopButton = computed(
-  () => isStreaming.value && !String(userInput.value || '').trim()
+  () => canStopActiveRun.value && !String(userInput.value || '').trim()
 )
 const canSubmitSteer = computed(
   () =>
@@ -2363,7 +2366,7 @@ const isSendButtonDisabled = computed(() => {
     sendCooldownActive.value ||
     props.sendDisabled ||
     isWaitingForUserAction.value ||
-    (!userInput.value && !isProcessing.value) ||
+    (!String(userInput.value || '').trim() && !shouldShowStopButton.value) ||
     !currentAgent.value
   )
 })
@@ -3357,7 +3360,7 @@ const handleSendOrStop = async (payload) => {
   const threadId = currentChatId.value
   const threadState = getThreadState(threadId)
   const hasNewInput = Boolean(String(userInput.value || '').trim() || payload?.image)
-  if (threadState?.activeRunId && threadState?.isStreaming && !hasNewInput) {
+  if (threadState?.activeRunId && canStopActiveRun.value && !hasNewInput) {
     try {
       await agentApi.cancelAgentRun(threadState.activeRunId)
       threadState.pendingInterrupt = null

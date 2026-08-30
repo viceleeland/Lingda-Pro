@@ -505,7 +505,7 @@ async def resolve_agent_resource_options(
         else:
             from yuxi.knowledge.runtime import knowledge_base
 
-            databases = await knowledge_base.get_databases_by_user(user)
+            databases = await knowledge_base.get_databases_by_user(user, db=db)
             options["knowledges"] = [
                 _resource_option(item.kb_id, item.name, item.description) for item in databases if item.kb_id
             ]
@@ -546,6 +546,7 @@ async def normalize_agent_context_config(
     db,
     user,
     context_schema: type[BaseContext] | None = None,
+    resolved_resource_options: dict[str, list[dict[str, str]]] | None = None,
 ) -> dict:
     schema = context_schema or BaseContext
     raw_context = dict(context) if isinstance(context, dict) else {}
@@ -555,7 +556,16 @@ async def normalize_agent_context_config(
     resource_fields = _AGENT_RESOURCE_FIELDS & field_names
     fields_to_load = _resource_fields_requiring_available_keys(normalized, resource_fields)
     if fields_to_load:
-        resource_options = await resolve_agent_resource_options(fields_to_load, db=db, user=user)
+        resource_options = {
+            field_name: list(options)
+            for field_name, options in (resolved_resource_options or {}).items()
+            if field_name in fields_to_load
+        }
+        unresolved_fields = fields_to_load - resource_options.keys()
+        if unresolved_fields:
+            resource_options.update(
+                await resolve_agent_resource_options(unresolved_fields, db=db, user=user)
+            )
         available = {
             field_name: [option["key"] for option in field_options]
             for field_name, field_options in resource_options.items()
@@ -614,11 +624,26 @@ async def prepare_agent_runtime_context(
             for field_name in context_resource_fields
             if hasattr(context, field_name)
         }
+        resolved_resource_options: dict[str, list[dict[str, str]]] = {}
+        if _lite_mode_enabled():
+            setattr(context, "_visible_knowledge_bases", [])
+            resolved_resource_options["knowledges"] = []
+        else:
+            from yuxi.agents.backends.knowledge_base_backend import resolve_visible_knowledge_bases_for_context
+
+            visible_databases = await resolve_visible_knowledge_bases_for_context(context, db=db, user=user)
+            resolved_resource_options["knowledges"] = [
+                _resource_option(item.get("kb_id"), item.get("name"), item.get("description"))
+                for item in visible_databases
+                if item.get("kb_id")
+            ]
+
         normalized = await normalize_agent_context_config(
             raw_resources,
             db=db,
             user=user,
             context_schema=schema,
+            resolved_resource_options=resolved_resource_options,
         )
         for field_name in context_resource_fields:
             if hasattr(context, field_name):
@@ -626,11 +651,6 @@ async def prepare_agent_runtime_context(
 
         if _lite_mode_enabled():
             context.knowledges = []
-            setattr(context, "_visible_knowledge_bases", [])
-        else:
-            from yuxi.agents.backends.knowledge_base_backend import resolve_visible_knowledge_bases_for_context
-
-            await resolve_visible_knowledge_bases_for_context(context)
         skill_scope = getattr(context, "_skill_runtime_snapshot", None)
         if not isinstance(skill_scope, dict):
             skill_scope = await resolve_runtime_skills_for_context(context, db=db, user=user)

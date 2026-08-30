@@ -22,6 +22,16 @@ DEFAULT_SHARE_CONFIG = {
     "read_scope": {"access_level": "global", "department_ids": [], "user_uids": []},
     "manage_scope": None,
 }
+WORKSPACE_FILE_CAPABILITIES = frozenset({"file_upload", "files"})
+
+
+def project_agent_capabilities(capabilities: list[str], config_json: dict[str, Any] | None) -> list[str]:
+    """按智能体运行配置投影前端可用能力。"""
+
+    context_config = (config_json or {}).get("context")
+    if isinstance(context_config, dict) and context_config.get("enable_workspace_tools") is False:
+        return [capability for capability in capabilities if capability not in WORKSPACE_FILE_CAPABILITIES]
+    return list(capabilities)
 
 GENERAL_PURPOSE_AGENT_SLUG = "general-purpose"
 GENERAL_PURPOSE_AGENT_NAME = "通用任务"
@@ -529,7 +539,10 @@ class AgentRepository:
                 )
                 if backend_info_cache is not None:
                     backend_info_cache[cache_key] = backend_info
-            data["capabilities"] = backend_info.get("capabilities", [])
+            data["capabilities"] = project_agent_capabilities(
+                backend_info.get("capabilities", []),
+                agent.config_json,
+            )
             data["metadata"] = backend_info.get("metadata", {})
             if include_configurable_items:
                 data["configurable_items"] = backend_info.get("configurable_items", {})

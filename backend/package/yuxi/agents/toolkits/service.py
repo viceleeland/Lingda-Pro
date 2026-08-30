@@ -58,6 +58,7 @@ def _ensure_metadata_loaded():
             runtime_info["category"] = extra.category
             runtime_info["tags"] = extra.tags
             runtime_info["config_guide"] = extra.config_guide
+            runtime_info["requires_workspace_runtime"] = extra.requires_workspace_runtime
             # display_name 优先级高于 tool.name
             if extra.display_name:
                 runtime_info["name"] = extra.display_name
@@ -66,6 +67,7 @@ def _ensure_metadata_loaded():
             runtime_info["category"] = "buildin"
             runtime_info["tags"] = []
             runtime_info["config_guide"] = ""
+            runtime_info["requires_workspace_runtime"] = False
 
         _metadata_cache.append(runtime_info)
 

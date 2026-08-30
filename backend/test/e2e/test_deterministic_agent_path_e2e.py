@@ -13,7 +13,15 @@ import asyncpg
 import httpx
 import pytest
 
-from e2e_helpers import cancel_run, consume_events, delete_agent, postgres_dsn, wait_for_run
+from e2e_helpers import (
+    RUN_TIMEOUT_SECONDS,
+    cancel_run,
+    consume_events,
+    delete_agent,
+    iter_sse,
+    postgres_dsn,
+    wait_for_run,
+)
 from test.live_api_cleanup import make_test_conversation_metadata, make_test_conversation_title
 from yuxi.agents.backends.sandbox import ProvisionerSandboxBackend, get_sandbox_provider
 from yuxi.workspace.paths import workspace_uid_dirname
@@ -27,6 +35,10 @@ EXPECTED_PRELOADED_TOOL = "present_artifacts"
 EXPECTED_TOOL_CALL_ID = "call-preloaded-tool"
 PROVIDER_ID = "ci-replay"
 MODEL_SPEC = f"{PROVIDER_ID}:deterministic-chat"
+FAILURE_MODEL_ID = "deterministic-failure-chat"
+FAILURE_INPUT_MARKER = "DETERMINISTIC_AGENT_E2E_MODEL_RETRY_FAILURE"
+FAILURE_ERROR_MARKER = "YUXI_DETERMINISTIC_MODEL_RETRY_FAILURE"
+PROVIDER_CACHE_SETTLE_SECONDS = 6
 
 
 async def test_replay_rejects_requests_outside_deterministic_contract() -> None:
@@ -92,20 +104,42 @@ async def test_replay_rejects_requests_outside_deterministic_contract() -> None:
             assert response.status_code == 422, response.text
             assert response.json() == {"error": expected_error}
 
+        failure_response = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer ci-replay-key"},
+            json={
+                **valid_body,
+                "model": FAILURE_MODEL_ID,
+                "messages": [
+                    {"role": "system", "content": EXPECTED_PRELOADED_SKILL_MARKER},
+                    {"role": "user", "content": FAILURE_INPUT_MARKER},
+                ],
+            },
+        )
+        assert failure_response.status_code == 503, failure_response.text
+        assert failure_response.json()["error"]["message"] == FAILURE_ERROR_MARKER
 
-async def _create_provider(client: httpx.AsyncClient, headers: dict[str, str]) -> None:
+
+async def _create_provider(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    *,
+    provider_id: str = PROVIDER_ID,
+    model_id: str = "deterministic-chat",
+    base_url: str = "http://api:8765/v1",
+) -> None:
     response = await client.post(
         "/api/system/model-providers",
         json={
-            "provider_id": PROVIDER_ID,
+            "provider_id": provider_id,
             "display_name": "CI deterministic replay",
             "provider_type": "openai",
-            "base_url": "http://api:8765/v1",
+            "base_url": base_url,
             "api_key": "ci-replay-key",
             "capabilities": ["chat"],
             "enabled_models": [
                 {
-                    "id": "deterministic-chat",
+                    "id": model_id,
                     "display_name": "Deterministic chat",
                     "type": "chat",
                     "source": "manual",
@@ -116,11 +150,17 @@ async def _create_provider(client: httpx.AsyncClient, headers: dict[str, str]) -
         headers=headers,
     )
     assert response.status_code == 200, response.text
-    assert response.json()["data"]["provider_id"] == PROVIDER_ID
+    assert response.json()["data"]["provider_id"] == provider_id
+    # API 与 worker 进程各自缓存 provider 列表；等待 worker 的 5 秒 TTL 失效后再运行 Agent。
+    await asyncio.sleep(PROVIDER_CACHE_SETTLE_SECONDS)
 
 
-async def _delete_provider(client: httpx.AsyncClient, headers: dict[str, str]) -> None:
-    response = await client.delete(f"/api/system/model-providers/{PROVIDER_ID}", headers=headers)
+async def _delete_provider(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    provider_id: str = PROVIDER_ID,
+) -> None:
+    response = await client.delete(f"/api/system/model-providers/{provider_id}", headers=headers)
     assert response.status_code in {200, 404}, response.text
 
 
@@ -153,8 +193,16 @@ async def _run_deterministic(
     return run
 
 
-async def _create_agent(client: httpx.AsyncClient, headers: dict[str, str], uid: str) -> str:
-    slug = f"ci-deterministic-{uuid.uuid4().hex[:8]}"
+async def _create_agent(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    uid: str,
+    *,
+    model_spec: str = MODEL_SPEC,
+    model_retry_times: int = 2,
+    slug: str | None = None,
+) -> str:
+    slug = slug or f"ci-deterministic-{uuid.uuid4().hex[:8]}"
     response = await client.post(
         "/api/agent",
         json={
@@ -164,7 +212,8 @@ async def _create_agent(client: httpx.AsyncClient, headers: dict[str, str], uid:
             "description": "无外部密钥的 assembled-path 测试智能体",
             "config_json": {
                 "context": {
-                    "model": MODEL_SPEC,
+                    "model": model_spec,
+                    "model_retry_times": model_retry_times,
                     "system_prompt": f"不要调用工具，只输出 {EXPECTED_OUTPUT}。",
                     "tools": [],
                     "knowledges": [],
@@ -189,6 +238,66 @@ async def _create_agent(client: httpx.AsyncClient, headers: dict[str, str], uid:
     assert response.status_code == 200, response.text
     assert response.json()["agent"]["slug"] == slug
     return slug
+
+
+async def _assert_failed_execution_facts(run_id: str, request_id: str, model_spec: str) -> None:
+    """失败 Run、输出消息和 attempt 必须绑定同一执行事实。"""
+
+    conn = await asyncpg.connect(postgres_dsn())
+    try:
+        run = await conn.fetchrow(
+            """
+            SELECT status, request_id, error_type, error_message, output_message_id, manifest
+            FROM agent_runs
+            WHERE id = $1
+            """,
+            run_id,
+        )
+        assert run, f"agent_runs row missing for {run_id}"
+        assert run["status"] == "failed"
+        assert run["request_id"] == request_id
+        assert run["error_type"] == "unexpected_error"
+        assert FAILURE_ERROR_MARKER in run["error_message"]
+        manifest = run["manifest"]
+        if isinstance(manifest, str):
+            manifest = json.loads(manifest)
+        assert manifest["model"] == {"spec": model_spec}
+
+        assistant_messages = await conn.fetch(
+            """
+            SELECT id, content, extra_metadata
+            FROM messages
+            WHERE run_id = $1 AND role = 'assistant'
+            ORDER BY id
+            """,
+            run_id,
+        )
+        assert all(not str(message["content"]).startswith("Model call failed after") for message in assistant_messages)
+        if run["output_message_id"] is not None:
+            output_message = next(
+                message for message in assistant_messages if message["id"] == run["output_message_id"]
+            )
+            metadata = output_message["extra_metadata"]
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            assert output_message["content"] == ""
+            assert metadata.get("is_error") is True
+
+        attempt = await conn.fetchrow(
+            """
+            SELECT outcome, finished_at
+            FROM agent_run_attempts
+            WHERE run_id = $1
+            ORDER BY attempt_no DESC
+            LIMIT 1
+            """,
+            run_id,
+        )
+        assert attempt
+        assert attempt["outcome"] == "failed"
+        assert attempt["finished_at"] is not None
+    finally:
+        await conn.close()
 
 
 async def _assert_persisted_causality(run_id: str, request_id: str) -> None:
@@ -372,6 +481,104 @@ async def test_deterministic_agent_path_reaches_persisted_result(
         if agent_slug:
             await delete_agent(e2e_client, e2e_headers, agent_slug)
         await _delete_provider(e2e_client, e2e_headers)
+
+
+async def test_model_retry_exhaustion_fails_run_without_normal_output(
+    e2e_client: httpx.AsyncClient,
+    e2e_headers: dict[str, str],
+) -> None:
+    me_response = await e2e_client.get("/api/auth/me", headers=e2e_headers)
+    assert me_response.status_code == 200, me_response.text
+    uid = str(me_response.json()["uid"])
+
+    provider_id = f"ci-replay-failure-{uuid.uuid4().hex[:8]}"
+    model_spec = f"{provider_id}:{FAILURE_MODEL_ID}"
+    agent_slug = f"e2e-agent-call-model-failure-{uuid.uuid4().hex[:8]}"
+    thread_id: str | None = None
+    run_id: str | None = None
+    try:
+        await _create_provider(
+            e2e_client,
+            e2e_headers,
+            provider_id=provider_id,
+            model_id=FAILURE_MODEL_ID,
+        )
+        await _create_agent(
+            e2e_client,
+            e2e_headers,
+            uid,
+            model_spec=model_spec,
+            model_retry_times=0,
+            slug=agent_slug,
+        )
+        request_id = f"deterministic-model-failure-{uuid.uuid4()}"
+        run_response = await e2e_client.post(
+            "/api/agent-invocation/agent-call/runs",
+            json={
+                "agent_slug": agent_slug,
+                "messages": [{"role": "user", "content": FAILURE_INPUT_MARKER}],
+                "request_id": request_id,
+                "async_mode": True,
+            },
+            headers=e2e_headers,
+        )
+        assert run_response.status_code == 200, run_response.text
+        run_id = str(run_response.json()["run_id"])
+        thread_id = str(run_response.json()["thread_id"])
+
+        events: list[tuple[str, dict]] = []
+
+        async def collect_events() -> None:
+            async for event, payload in iter_sse(e2e_client, e2e_headers, run_id):
+                events.append((event, payload))
+                if event == "end":
+                    return
+
+        await asyncio.wait_for(collect_events(), timeout=RUN_TIMEOUT_SECONDS)
+        event_payloads = [(event, envelope.get("payload") or {}) for event, envelope in events]
+        serialized_events = json.dumps(event_payloads, ensure_ascii=False)
+        assert any(
+            event == "error" and "运行失败，请稍后重试" in json.dumps(payload, ensure_ascii=False)
+            for event, payload in event_payloads
+        ), events
+        assert not any(
+            event == "custom" and payload.get("name") == "yuxi.response_complete"
+            for event, payload in event_payloads
+        )
+        assert "Model call failed after" not in serialized_events
+        assert FAILURE_ERROR_MARKER not in serialized_events
+        end_payloads = [payload for event, payload in event_payloads if event == "end"]
+        assert len(end_payloads) == 1
+        assert end_payloads[0]["status"] == "failed"
+
+        run = await wait_for_run(e2e_client, e2e_headers, run_id)
+        assert run["status"] == "failed", run
+        assert run["error_type"] == "unexpected_error"
+        assert run["error_message"] == "运行失败，请稍后重试"
+
+        result = await e2e_client.get(f"/api/agent/runs/{run_id}/result", headers=e2e_headers)
+        assert result.status_code == 200, result.text
+        result_payload = result.json()
+        assert result_payload["status"] == "failed"
+        assert result_payload["output"] == ""
+        assert result_payload["error"]["type"] == "unexpected_error"
+        assert result_payload["error"]["message"] == "运行失败，请稍后重试"
+
+        await _assert_failed_execution_facts(run_id, request_id, model_spec)
+    finally:
+        try:
+            if run_id:
+                await cancel_run(e2e_client, e2e_headers, run_id)
+        finally:
+            try:
+                if thread_id:
+                    thread_delete = await e2e_client.delete(f"/api/chat/thread/{thread_id}", headers=e2e_headers)
+                    assert thread_delete.status_code in {200, 404}, thread_delete.text
+            finally:
+                try:
+                    await delete_agent(e2e_client, e2e_headers, agent_slug)
+                finally:
+                    await _delete_provider(e2e_client, e2e_headers, provider_id)
 
 
 async def test_attachment_is_written_to_user_workspace_workdir_and_survives_runtime_recreation(

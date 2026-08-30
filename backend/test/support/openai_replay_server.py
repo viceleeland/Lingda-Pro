@@ -10,10 +10,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 EXPECTED_OUTPUT = "DETERMINISTIC_AGENT_E2E_OK"
 EXPECTED_AUTHORIZATION = "Bearer ci-replay-key"
 EXPECTED_MODEL = "deterministic-chat"
+FAILURE_MODEL = "deterministic-failure-chat"
 EXPECTED_PRELOADED_SKILL_MARKER = "# 图片生成技能"
 EXPECTED_PRELOADED_TOOL = "present_artifacts"
 EXPECTED_TOOL_CALL_ID = "call-preloaded-tool"
 EXPECTED_TOOL_RESULT_MARKER = "已将交付物展示给用户"
+FAILURE_INPUT_MARKER = "DETERMINISTIC_AGENT_E2E_MODEL_RETRY_FAILURE"
+FAILURE_ERROR_MARKER = "YUXI_DETERMINISTIC_MODEL_RETRY_FAILURE"
 
 
 def _validate_request(authorization: str | None, request: dict) -> str | None:
@@ -21,7 +24,8 @@ def _validate_request(authorization: str | None, request: dict) -> str | None:
 
     if authorization != EXPECTED_AUTHORIZATION:
         return "invalid_authorization"
-    if request.get("model") != EXPECTED_MODEL:
+    model = request.get("model")
+    if model not in {EXPECTED_MODEL, FAILURE_MODEL}:
         return "invalid_model"
     if request.get("stream") is not True:
         return "stream_required"
@@ -29,7 +33,8 @@ def _validate_request(authorization: str | None, request: dict) -> str | None:
     if not isinstance(messages, list) or not messages:
         return "messages_required"
     serialized_messages = json.dumps(messages, ensure_ascii=False)
-    if EXPECTED_OUTPUT not in serialized_messages:
+    expected_input = FAILURE_INPUT_MARKER if model == FAILURE_MODEL else EXPECTED_OUTPUT
+    if expected_input not in serialized_messages:
         return "expected_input_missing"
     if EXPECTED_PRELOADED_SKILL_MARKER not in serialized_messages:
         return "preloaded_skill_missing"
@@ -138,6 +143,18 @@ class ReplayHandler(BaseHTTPRequestHandler):
             return
 
         model = str(request["model"])
+        if model == FAILURE_MODEL:
+            self._write_json(
+                503,
+                {
+                    "error": {
+                        "message": FAILURE_ERROR_MARKER,
+                        "type": "deterministic_model_failure",
+                    }
+                },
+            )
+            return
+
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")

@@ -15,7 +15,7 @@ from langgraph.types import Command
 
 from yuxi.agents.backends.paths import VIRTUAL_PERSONAL_SKILLS_PATH, VIRTUAL_SKILLS_PATH
 from yuxi.agents.mcp.service import get_enabled_mcp_tools
-from yuxi.agents.skills.runtime import RuntimeSkill, build_dependency_bundle
+from yuxi.agents.skills.runtime import RuntimeSkill, build_dependency_bundle, resolve_usable_skill_slugs
 from yuxi.agents.skills.service import is_valid_skill_slug, normalize_string_list
 from yuxi.agents.toolkits import get_all_tool_instances
 from yuxi.utils.logging_config import logger
@@ -69,9 +69,12 @@ class SkillsMiddleware(AgentMiddleware):
         runtime_context = request.runtime.context
 
         if self.enable_skills_prompt:
-            effective_skills = getattr(runtime_context, "_effective_skill_slugs", None)
-            if isinstance(effective_skills, list):
-                effective_skills = normalize_string_list(effective_skills)
+            configured_skills = getattr(runtime_context, "_effective_skill_slugs", None)
+            if isinstance(configured_skills, list):
+                usable_skills = set(resolve_usable_skill_slugs(runtime_context))
+                effective_skills = [
+                    slug for slug in normalize_string_list(configured_skills) if slug in usable_skills
+                ]
                 preloaded_skills = self._get_preloaded_skills(runtime_context)
                 preloaded_set = set(preloaded_skills)
                 prompt_sections: list[str] = []
@@ -269,8 +272,7 @@ class SkillsMiddleware(AgentMiddleware):
         return None
 
     def _get_effective_skills(self, runtime_context) -> set[str]:
-        selected = getattr(runtime_context, "_effective_skill_slugs", [])
-        return set(normalize_string_list(selected if isinstance(selected, list) else []))
+        return set(resolve_usable_skill_slugs(runtime_context))
 
     def _get_runtime_skills(self, runtime_context) -> dict[str, RuntimeSkill]:
         runtime_skills = getattr(runtime_context, "_runtime_skills", {})

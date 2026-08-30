@@ -79,6 +79,11 @@ def serialize_subagent_run_state(run: AgentRun) -> dict:
     if not tool_call_id:
         raise ValueError("subagent run 缺少 tool_call_id")
 
+    public_error = (
+        agent_run_service.public_run_error_message(getattr(run, "error_type", None))
+        if run.error_message
+        else None
+    )
     state = {
         "id": tool_call_id,
         "run_id": run.id,
@@ -88,7 +93,7 @@ def serialize_subagent_run_state(run: AgentRun) -> dict:
         "status": run.status,
         "created_at": format_utc_datetime(run.created_at),
         "completed_at": format_utc_datetime(run.finished_at),
-        "error": run.error_message,
+        "error": public_error,
         **subagent_run_urls(run.id),
     }
     return {key: value for key, value in state.items() if value is not None}

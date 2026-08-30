@@ -11,12 +11,14 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 import yuxi.agents.backends.sandbox.backend as sandbox_backend_module
-from deepagents.backends import CompositeBackend
+from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.backends.protocol import GlobResult, GrepResult, ReadResult
 from deepagents.backends.sandbox import MAX_BINARY_BYTES
 from langchain_core.messages import ToolMessage
+from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt.tool_node import ToolRuntime
 from yuxi.agents.backends.composite import (
+    context_requires_workspace_runtime,
     create_agent_composite_backend,
     create_agent_filesystem_middleware,
     sync_agent_context_skills,
@@ -25,6 +27,7 @@ from yuxi.agents.backends.sandbox import ProvisionerSandboxProvider, sandbox_id_
 from yuxi.agents.backends.sandbox.backend import ProvisionerSandboxBackend
 from yuxi.agents.backends.sandbox.provider import SandboxIdentityMismatchError
 from yuxi.agents.middlewares.skills import SkillsMiddleware
+from yuxi.agents.state import BaseState
 from yuxi.agents.backends.paths import workdir_runtime_paths
 
 WORKDIR_RELATIVE_PATH = "projects/11111111-1111-4111-8111-111111111111"
@@ -113,6 +116,62 @@ def test_create_agent_composite_backend_derives_virtual_workdir_from_relative_pa
     backend = create_agent_composite_backend(context)
 
     assert backend.artifacts_root == f"{WORKDIR_PATH}/outputs"
+
+
+def test_create_agent_composite_backend_uses_state_for_knowledge_only_agent():
+    context = _runtime().context
+    context.enable_workspace_tools = False
+    context.enable_subagents = False
+
+    backend = create_agent_composite_backend(context)
+
+    assert isinstance(backend.default, StateBackend)
+    assert backend.routes == {}
+    assert backend.artifacts_root == "/outputs"
+
+
+def test_workspace_disabled_lazy_skill_does_not_force_unusable_runtime(monkeypatch):
+    context = _runtime().context
+    context.enable_workspace_tools = False
+    context.enable_subagents = False
+    context.tools = []
+    context._skill_runtime_snapshot = {
+        "effective_skills": ["lazy-skill"],
+        "preloaded_skills": [],
+        "runtime_skills": {"lazy-skill": {"tools": ["workspace-tool"]}},
+    }
+    monkeypatch.setattr(
+        "yuxi.agents.toolkits.registry.get_extra_metadata",
+        lambda _name: SimpleNamespace(requires_workspace_runtime=True),
+    )
+
+    assert context_requires_workspace_runtime(context) is False
+
+    context._skill_runtime_snapshot["preloaded_skills"] = ["lazy-skill"]
+    assert context_requires_workspace_runtime(context) is True
+
+
+@pytest.mark.asyncio
+async def test_knowledge_only_state_backend_writes_inside_real_graph():
+    context = _runtime().context
+    context.enable_workspace_tools = False
+    context.enable_subagents = False
+    backend = create_agent_composite_backend(context)
+    output_path = "/outputs/conversation_history/summary.txt"
+
+    def write_summary(_state):
+        result = backend.write(output_path, "summary content")
+        assert result.error is None
+        return {}
+
+    builder = StateGraph(BaseState)
+    builder.add_node("write_summary", write_summary)
+    builder.add_edge(START, "write_summary")
+    builder.add_edge("write_summary", END)
+
+    state = await builder.compile().ainvoke({"messages": []})
+
+    assert output_path in state["files"]
 
 
 def test_sandbox_provider_release_deletes_sandbox_and_clears_cache():

@@ -13,6 +13,13 @@ from yuxi.utils.datetime_utils import utc_now_naive
 pytestmark = [pytest.mark.asyncio, pytest.mark.unit]
 
 
+def _runtime_manifest(*, workspace_required: bool) -> dict:
+    return {
+        "manifest_version": 1,
+        "runtime": {"workspace_required": workspace_required},
+    }
+
+
 @pytest_asyncio.fixture()
 async def session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -544,6 +551,7 @@ async def test_attempt_owner_blocks_duplicate_until_retry_release(session):
         request_id="retry-request",
         input_payload={},
     )
+    run.manifest = _runtime_manifest(workspace_required=True)
     now = utc_now_naive()
 
     _, first_acquired = await repo.mark_running(
@@ -585,6 +593,169 @@ async def test_attempt_owner_blocks_duplicate_until_retry_release(session):
     assert retry_acquired is True
     assert run.status == "running"
     assert run.worker_id == "worker-1:attempt-2"
+
+
+async def test_state_only_retry_reclaims_without_runtime_cleanup(session):
+    repository = AgentRunRepository(session)
+    run = await repository.create_run(
+        run_id="state-only-retry-run",
+        conversation_thread_id="state-only-retry-thread",
+        agent_slug="main",
+        uid="user-1",
+        request_id="state-only-retry-request",
+        input_payload={},
+    )
+    run.manifest = _runtime_manifest(workspace_required=False)
+    now = utc_now_naive()
+
+    _, acquired = await repository.mark_running(
+        run.id,
+        worker_id="state-only-worker:attempt-1",
+        lease_seconds=60,
+        now=now,
+    )
+    released = await repository.release_lease_for_retry(
+        run.id,
+        worker_id="state-only-worker:attempt-1",
+        now=now + timedelta(seconds=1),
+    )
+    _, reacquired = await repository.mark_running(
+        run.id,
+        worker_id="state-only-worker:attempt-2",
+        lease_seconds=60,
+        now=now + timedelta(seconds=2),
+    )
+
+    assert acquired is True
+    assert released is True
+    assert run.runtime_cleanup_pending is False
+    assert reacquired is True
+
+
+async def test_runtime_cleanup_fence_is_derived_from_manifest_for_terminal_and_early_failures(session):
+    repository = AgentRunRepository(session)
+    now = utc_now_naive()
+
+    early_failure = await repository.create_run(
+        run_id="pre-manifest-failure-run",
+        conversation_thread_id="pre-manifest-failure-thread",
+        agent_slug="main",
+        uid="user-1",
+        request_id="pre-manifest-failure-request",
+        input_payload={},
+    )
+    _, early_changed = await repository.set_terminal_status(
+        early_failure.id,
+        status="failed",
+        error_type="manifest_persist_failed",
+        now=now,
+    )
+
+    state_only = await repository.create_run(
+        run_id="state-only-terminal-run",
+        conversation_thread_id="state-only-terminal-thread",
+        agent_slug="main",
+        uid="user-1",
+        request_id="state-only-terminal-request",
+        input_payload={},
+    )
+    state_only.manifest = _runtime_manifest(workspace_required=False)
+    await repository.mark_running(
+        state_only.id,
+        worker_id="state-only-terminal-worker",
+        lease_seconds=60,
+        now=now,
+    )
+    _, state_only_changed = await repository.set_terminal_status(
+        state_only.id,
+        status="failed",
+        worker_id="state-only-terminal-worker",
+        now=now + timedelta(seconds=1),
+    )
+
+    workspace = await repository.create_run(
+        run_id="workspace-terminal-run",
+        conversation_thread_id="workspace-terminal-thread",
+        agent_slug="main",
+        uid="user-1",
+        request_id="workspace-terminal-request",
+        input_payload={},
+    )
+    workspace.manifest = _runtime_manifest(workspace_required=True)
+    await repository.mark_running(
+        workspace.id,
+        worker_id="workspace-terminal-worker",
+        lease_seconds=60,
+        now=now,
+    )
+    _, workspace_changed = await repository.set_terminal_status(
+        workspace.id,
+        status="failed",
+        worker_id="workspace-terminal-worker",
+        now=now + timedelta(seconds=1),
+    )
+
+    assert early_changed is True
+    assert early_failure.runtime_cleanup_pending is False
+    assert state_only_changed is True
+    assert state_only.runtime_cleanup_pending is False
+    assert workspace_changed is True
+    assert workspace.runtime_cleanup_pending is True
+
+
+async def test_state_only_cancel_and_lease_reconcile_do_not_create_runtime_cleanup_fence(session):
+    repository = AgentRunRepository(session)
+    now = utc_now_naive()
+
+    cancelled = await repository.create_run(
+        run_id="state-only-cancel-run",
+        conversation_thread_id="state-only-cancel-thread",
+        agent_slug="main",
+        uid="user-1",
+        request_id="state-only-cancel-request",
+        input_payload={},
+    )
+    cancelled.manifest = _runtime_manifest(workspace_required=False)
+    await repository.mark_running(
+        cancelled.id,
+        worker_id="state-only-cancel-worker",
+        lease_seconds=60,
+        now=now,
+    )
+    await repository.request_cancel_execution_tree(
+        run_id=cancelled.id,
+        uid=cancelled.uid,
+        cascade_descendants=False,
+    )
+    _, cancel_changed = await repository.set_terminal_status(
+        cancelled.id,
+        status="cancelled",
+        error_type="cancelled",
+        worker_id="state-only-cancel-worker",
+        now=now + timedelta(seconds=1),
+    )
+
+    expired = await repository.create_run(
+        run_id="state-only-expired-run",
+        conversation_thread_id="state-only-expired-thread",
+        agent_slug="main",
+        uid="user-1",
+        request_id="state-only-expired-request",
+        input_payload={},
+    )
+    expired.manifest = _runtime_manifest(workspace_required=False)
+    await repository.mark_running(
+        expired.id,
+        worker_id="state-only-expired-worker",
+        lease_seconds=10,
+        now=now,
+    )
+    reconciled, _ = await repository.reconcile_expired_leases(now=now + timedelta(seconds=11))
+
+    assert cancel_changed is True
+    assert cancelled.runtime_cleanup_pending is False
+    assert [run.id for run in reconciled] == [expired.id]
+    assert expired.runtime_cleanup_pending is False
 
 
 async def test_expired_owner_cannot_finish_or_release_before_reconciliation(session):
@@ -797,6 +968,7 @@ async def test_mark_running_creates_single_attempt_for_initial_claim_and_live_ow
 async def test_retry_release_then_reclaim_uses_new_attempt_no_and_keeps_old_fact(session):
     repository = AgentRunRepository(session)
     run = await _seed_running_run(session)
+    run.manifest = _runtime_manifest(workspace_required=True)
     now = utc_now_naive()
 
     await repository.mark_running(run.id, worker_id="worker-a:token-1", lease_seconds=60, now=now)

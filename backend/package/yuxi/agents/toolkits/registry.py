@@ -11,6 +11,7 @@ class ToolExtraMetadata:
     display_name: str = ""  # 显示名称（给人看的名字）
     icon: str = ""
     config_guide: str = ""  # 配置说明（给人看的使用前配置提示）
+    requires_workspace_runtime: bool = False
 
 
 # 全局注册表: tool_name -> ToolExtraMetadata
@@ -42,6 +43,7 @@ def tool(
     display_name: str = "",
     icon: str = "",
     config_guide: str = "",
+    requires_workspace_runtime: bool = False,
     name_or_callable: str | Callable | None = None,
     description: str | None = None,
     args_schema: type | None = None,
@@ -78,6 +80,7 @@ def tool(
             display_name=display_name,
             icon=icon,
             config_guide=config_guide,
+            requires_workspace_runtime=requires_workspace_runtime,
         )
 
         # 自动收集工具实例

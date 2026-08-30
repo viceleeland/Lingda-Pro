@@ -91,6 +91,7 @@ def _subagent_run(
     subagent_name: str = "Worker",
     description: str = "run in background",
     error_message: str | None = None,
+    error_type: str | None = None,
 ):
     return SimpleNamespace(
         id="child-run",
@@ -109,6 +110,7 @@ def _subagent_run(
         created_at=None,
         finished_at=None,
         error_message=error_message,
+        error_type=error_type,
     )
 
 
@@ -153,6 +155,7 @@ def _patch_task_start_and_await(
                 subagent_name=started["agent_item"].name,
                 description=started["input_message"].content,
                 error_message=error_message,
+                error_type="worker_error" if error_message else None,
             )
 
     async def fake_await_agent_run_result(*, run_id: str, current_uid: str):
@@ -164,7 +167,10 @@ def _patch_task_start_and_await(
             "thread_id": thread_id,
         }
         if error_message:
-            result["error"] = {"type": "RuntimeError", "message": error_message}
+            result["error"] = {
+                "type": "worker_error",
+                "message": agent_run_service.public_run_error_message("worker_error"),
+            }
         if wait_timeout:
             raise agent_run_service.AgentRunWaitTimeout(result)
         return result
@@ -361,9 +367,11 @@ async def test_task_tool_records_failed_subagent_run(monkeypatch) -> None:
     )
 
     assert isinstance(result, Command)
-    assert result.update["messages"][0].content == "> 子智能体线程 ID: child-thread\n\n---\n\nchild boom"
+    assert result.update["messages"][0].content == (
+        "> 子智能体线程 ID: child-thread\n\n---\n\n运行失败，请稍后重试"
+    )
     assert result.update["subagent_runs"][0]["status"] == "failed"
-    assert result.update["subagent_runs"][0]["error"] == "child boom"
+    assert result.update["subagent_runs"][0]["error"] == "运行失败，请稍后重试"
 
 
 @pytest.mark.asyncio

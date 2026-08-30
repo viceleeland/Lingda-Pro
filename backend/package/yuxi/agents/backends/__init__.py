@@ -1,6 +1,7 @@
 from deepagents.backends import CompositeBackend, StateBackend
 
 from .composite import (
+    context_requires_workspace_runtime,
     create_agent_composite_backend,
     create_agent_filesystem_middleware,
     sync_agent_context_skills,
@@ -19,6 +20,7 @@ from .sandbox import (
 __all__ = [
     "CompositeBackend",
     "StateBackend",
+    "context_requires_workspace_runtime",
     "create_agent_composite_backend",
     "create_agent_filesystem_middleware",
     "sync_agent_context_skills",

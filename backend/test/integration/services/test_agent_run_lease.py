@@ -118,6 +118,23 @@ async def _create_run(
         return run_id, thread_id, message.id
 
 
+async def _record_runtime_manifest(
+    repository: AgentRunRepository,
+    *,
+    run_id: str,
+    worker_id: str,
+    workspace_required: bool,
+) -> None:
+    persisted, recorded = await repository.record_run_manifest(
+        run_id,
+        manifest={"manifest_version": 1, "runtime": {"workspace_required": workspace_required}},
+        fingerprint=("1" if workspace_required else "0") * 64,
+        worker_id=worker_id,
+    )
+    assert persisted is not None
+    assert recorded is True
+
+
 async def test_root_terminal_atomically_cancels_live_child_and_clears_lease(
     lease_database,
     monkeypatch: pytest.MonkeyPatch,
@@ -334,11 +351,18 @@ async def test_expired_root_reconciliation_cancels_live_child_before_runtime_rel
     child_thread_id = ""
     try:
         async with session_factory() as db:
-            _, acquired = await AgentRunRepository(db).mark_running(
+            repository = AgentRunRepository(db)
+            _, acquired = await repository.mark_running(
                 parent_id,
                 worker_id="worker-expired-tree-parent",
                 lease_seconds=10,
                 now=now,
+            )
+            await _record_runtime_manifest(
+                repository,
+                run_id=parent_id,
+                worker_id="worker-expired-tree-parent",
+                workspace_required=True,
             )
             await db.commit()
         assert acquired is True
@@ -612,6 +636,136 @@ async def test_interrupt_message_and_run_terminal_commit_together(lease_database
         assert run.status == "interrupted"
         assert run.error_type == "ask_user_question_required"
         assert output_message.content == "waiting"
+    finally:
+        await _cleanup_runs(session_factory, [thread_id])
+
+
+async def test_terminal_run_skips_cleanup_fence_when_runtime_was_not_created(
+    lease_database,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """轻量 Agent 未创建 runtime 时，终态事务应直接关闭 cleanup fence。"""
+    _, session_factory = lease_database
+    owner = "worker-no-runtime:attempt-owner"
+    run_id, thread_id, _ = await _create_run(session_factory)
+
+    class FakeGraph:
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={"messages": [AIMessage(id=f"output-{run_id}", content="done")]})
+
+    try:
+        async with session_factory() as db:
+            repository = AgentRunRepository(db)
+            run, acquired = await repository.mark_running(
+                run_id,
+                worker_id=owner,
+                lease_seconds=60,
+            )
+            await _record_runtime_manifest(
+                repository,
+                run_id=run_id,
+                worker_id=owner,
+                workspace_required=False,
+            )
+            await db.commit()
+            request_id = run.request_id
+            uid = run.uid
+        assert acquired is True
+
+        async with session_factory() as db:
+            committed = await chat_service.save_messages_from_langgraph_state(
+                agent_instance=object(),
+                thread_id=thread_id,
+                conv_repo=ConversationRepository(db),
+                config_dict={"configurable": {"thread_id": thread_id, "uid": uid}},
+                context=object(),
+                run_id=run_id,
+                request_id=request_id,
+                worker_id=owner,
+                complete_run=True,
+                graph=FakeGraph(),
+                runtime_cleanup_required=False,
+            )
+        assert committed is True
+
+        async with session_factory() as db:
+            run = await db.get(AgentRun, run_id)
+
+        monkeypatch.setattr(run_worker.pg_manager, "get_async_session_context", lambda: _session_context(session_factory))
+        monkeypatch.setattr(
+            run_worker,
+            "get_sandbox_provider",
+            lambda: pytest.fail("state-only completion must not contact the sandbox provisioner"),
+        )
+        await run_worker._release_runtime_before_terminal_event(run)
+
+        assert run.status == "completed"
+        assert run.runtime_cleanup_pending is False
+    finally:
+        await _cleanup_runs(session_factory, [thread_id])
+
+
+async def test_state_only_error_publishes_terminal_event_without_provisioner(
+    lease_database,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """模型错误沿 worker 终态路径收敛时，不得为不存在的 runtime 创建 cleanup owner。"""
+
+    _, session_factory = lease_database
+    owner = "worker-state-only-error:attempt-owner"
+    run_id, thread_id, _ = await _create_run(session_factory)
+
+    try:
+        async with session_factory() as db:
+            repository = AgentRunRepository(db)
+            run, acquired = await repository.mark_running(
+                run_id,
+                worker_id=owner,
+                lease_seconds=60,
+            )
+            await _record_runtime_manifest(
+                repository,
+                run_id=run_id,
+                worker_id=owner,
+                workspace_required=False,
+            )
+            await db.commit()
+        assert acquired is True
+        assert run is not None
+
+        monkeypatch.setattr(run_worker.pg_manager, "get_async_session_context", lambda: _session_context(session_factory))
+        monkeypatch.setattr(
+            run_worker,
+            "get_sandbox_provider",
+            lambda: pytest.fail("state-only failure must not contact the sandbox provisioner"),
+        )
+        append_end = AsyncMock()
+        monkeypatch.setattr(run_worker, "_append_end_event", append_end)
+
+        transition = await run_worker._finish_run(
+            run_id,
+            "failed",
+            thread_id=None,
+            chunk={"status": "error", "error_type": "model_error"},
+            current_user=None,
+            worker_id=owner,
+            error_type="model_error",
+            error_message="controlled model failure",
+        )
+
+        async with session_factory() as db:
+            persisted = await db.get(AgentRun, run_id)
+            active = await AgentRunRepository(db).get_active_run_by_thread_for_user(
+                agent_slug=persisted.agent_slug,
+                conversation_thread_id=thread_id,
+                uid=persisted.uid,
+            )
+
+        assert transition.changed is True
+        assert persisted.status == "failed"
+        assert persisted.runtime_cleanup_pending is False
+        assert active is None
+        append_end.assert_awaited_once()
     finally:
         await _cleanup_runs(session_factory, [thread_id])
 

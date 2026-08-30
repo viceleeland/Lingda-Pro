@@ -3,6 +3,17 @@ import { handleChatError } from '@/utils/errorHandler'
 import { unref } from 'vue'
 import { extractPendingInterrupt } from '@/composables/useApproval'
 
+const errorTypesWithPublicDetails = new Set(['output_persistence_error'])
+
+export const getStreamErrorMessage = (chunk) => {
+  if (!errorTypesWithPublicDetails.has(chunk?.error_type)) return '流式处理失败'
+
+  const publicDetail = chunk?.error_message || chunk?.message
+  return typeof publicDetail === 'string' && publicDetail.trim()
+    ? publicDetail
+    : '流式处理失败'
+}
+
 const serializeToolArgs = (args) => {
   if (typeof args === 'string') return args
   if (args === undefined || args === null) return ''
@@ -82,7 +93,8 @@ export function useAgentStreamHandler({
   processApprovalInStream,
   currentAgentId,
   supportsFiles,
-  streamSmoother
+  streamSmoother,
+  reportChatError = handleChatError
 }) {
   const debugPrefix = '[AgentStateDebug]'
   /**
@@ -123,6 +135,7 @@ export function useAgentStreamHandler({
             threadState.onGoingConv.msgChunks[resolvedRequestId] = [initMessage]
           }
           threadState.replyLoadingVisible = true
+          threadState.responseCompleted = false
           threadState.contextCompressing = false
         }
         return false
@@ -167,10 +180,12 @@ export function useAgentStreamHandler({
 
       case 'error':
         streamSmoother?.flushThread(threadId)
-        handleChatError({ message: chunkMessage }, 'stream')
+        reportChatError({ message: getStreamErrorMessage(chunk) }, 'stream')
         // Stop the loading indicator
         if (threadState) {
           threadState.isStreaming = false
+          threadState.activeRunSteerable = false
+          threadState.responseCompleted = false
           threadState.replyLoadingVisible = false
           threadState.pendingRequestId = null
           threadState.pendingInterrupt = null
@@ -221,11 +236,21 @@ export function useAgentStreamHandler({
         }
         return false
 
+      case 'response_complete':
+        streamSmoother?.flushThread(threadId)
+        threadState.replyLoadingVisible = false
+        threadState.activeRunSteerable = false
+        threadState.responseCompleted = true
+        threadState.contextCompressing = false
+        return false
+
       case 'finished':
         streamSmoother?.flushThread(threadId)
         // 先标记流式结束，但保持消息显示直到历史记录加载完成
         if (threadState) {
           threadState.isStreaming = false
+          threadState.activeRunSteerable = false
+          threadState.responseCompleted = false
           threadState.replyLoadingVisible = false
           threadState.pendingRequestId = null
           threadState.pendingInterrupt = null
@@ -258,6 +283,8 @@ export function useAgentStreamHandler({
         })
         if (threadState) {
           threadState.isStreaming = false
+          threadState.activeRunSteerable = false
+          threadState.responseCompleted = false
           threadState.replyLoadingVisible = false
           threadState.pendingRequestId = null
           threadState.contextCompressing = false

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +12,7 @@ let agentApi
 let useAgentRequestQueue
 let useAgentRunStream
 let useAgentStreamHandler
+let getStreamErrorMessage
 
 before(async () => {
   const storage = new Map()
@@ -25,7 +27,7 @@ before(async () => {
     '/src/composables/useAgentRequestQueue.js'
   ))
   ;({ useAgentRunStream } = await server.ssrLoadModule('/src/composables/useAgentRunStream.js'))
-  ;({ useAgentStreamHandler } = await server.ssrLoadModule(
+  ;({ useAgentStreamHandler, getStreamErrorMessage } = await server.ssrLoadModule(
     '/src/composables/useAgentStreamHandler.js'
   ))
 })
@@ -66,6 +68,102 @@ test('agent_state SSE 使在途状态请求失效', () => {
 
   assert.deepEqual(threadState.agentState, agentState)
   assert.equal(threadState.agentStateRequestVersion, 5)
+})
+
+test('response_complete stops the reply indicator while the run remains active', () => {
+  const threadState = {
+    isStreaming: true,
+    activeRunSteerable: true,
+    responseCompleted: false,
+    replyLoadingVisible: true,
+    contextCompressing: false,
+    onGoingConv: { msgChunks: {} }
+  }
+  let flushCount = 0
+  const { handleStreamChunk } = useAgentStreamHandler({
+    getThreadState: () => threadState,
+    processApprovalInStream: () => false,
+    currentAgentId: { value: 'agent-1' },
+    supportsFiles: { value: false },
+    streamSmoother: { flushThread: () => flushCount++ }
+  })
+
+  const shouldStop = handleStreamChunk({ status: 'response_complete' }, 'thread-1')
+
+  assert.equal(shouldStop, false)
+  assert.equal(flushCount, 1)
+  assert.equal(threadState.replyLoadingVisible, false)
+  assert.equal(threadState.isStreaming, true)
+  assert.equal(threadState.activeRunSteerable, false)
+  assert.equal(threadState.responseCompleted, true)
+})
+
+test('response_complete 尾部只保留有内容的发送动作并提供按钮可访问名称', () => {
+  const chatSource = readFileSync(
+    path.join(webRoot, 'src/components/AgentChatComponent.vue'),
+    'utf8'
+  )
+  const inputSource = readFileSync(
+    path.join(webRoot, 'src/components/MessageInputComponent.vue'),
+    'utf8'
+  )
+
+  assert.match(
+    chatSource,
+    /const canStopActiveRun = computed\([\s\S]*?responseCompleted !== true[\s\S]*?const shouldShowStopButton = computed\(\s*\(\) => canStopActiveRun\.value/
+  )
+  assert.match(
+    chatSource,
+    /!String\(userInput\.value \|\| ''\)\.trim\(\) && !shouldShowStopButton\.value/
+  )
+  assert.match(inputSource, /:aria-label="sendButtonLabel"/)
+  assert.match(
+    inputSource,
+    /const sendButtonLabel = computed\(\(\) => \(props\.isLoading \? '停止回答' : '发送消息'\)\)/
+  )
+})
+
+test('response_complete 后的持久化错误保留服务端错误详情并终止运行', () => {
+  const threadState = {
+    isStreaming: true,
+    replyLoadingVisible: true,
+    pendingRequestId: 'request-1',
+    contextCompressing: false,
+    onGoingConv: { msgChunks: {} }
+  }
+  const reportedErrors = []
+  const { handleStreamChunk } = useAgentStreamHandler({
+    getThreadState: () => threadState,
+    processApprovalInStream: () => false,
+    currentAgentId: { value: 'agent-1' },
+    supportsFiles: { value: false },
+    streamSmoother: { flushThread: () => {} },
+    reportChatError: ({ message }) => reportedErrors.push(message)
+  })
+  const errorChunk = {
+    status: 'error',
+    error_type: 'output_persistence_error',
+    error_message: '最终输出持久化或绑定失败'
+  }
+
+  assert.equal(handleStreamChunk({ status: 'response_complete' }, 'thread-1'), false)
+  assert.equal(getStreamErrorMessage(errorChunk), '最终输出持久化或绑定失败')
+  assert.equal(handleStreamChunk(errorChunk, 'thread-1'), true)
+  assert.deepEqual(reportedErrors, ['最终输出持久化或绑定失败'])
+  assert.equal(threadState.isStreaming, false)
+  assert.equal(threadState.pendingRequestId, null)
+})
+
+test('未知 worker 错误不向前端泄露内部异常详情', () => {
+  assert.equal(
+    getStreamErrorMessage({
+      status: 'error',
+      error_type: 'worker_error',
+      error_message: 'database connection failed at postgresql://internal-host',
+      message: 'resume failed at D:\\workspace\\yuxi\\runtime'
+    }),
+    '流式处理失败'
+  )
 })
 
 test('run_created 立即完成状态交接并订阅新 Run SSE', async () => {

@@ -27,6 +27,27 @@ RUN_STATUS_TO_DELIVERY_STATUS = {
 TOP_LEVEL_RUN_TYPES = ("chat", "resume")
 
 
+def _runtime_cleanup_required(run: AgentRun) -> bool:
+    """Derive cleanup ownership from the write-once runtime manifest."""
+
+    if run.run_type == "subagent":
+        return False
+
+    manifest = run.manifest
+    if manifest is None:
+        # The worker persists the manifest before it may create a runtime. A missing
+        # manifest therefore means execution failed before crossing that boundary.
+        return False
+    if isinstance(manifest, dict):
+        runtime = manifest.get("runtime")
+        if isinstance(runtime, dict) and isinstance(runtime.get("workspace_required"), bool):
+            return runtime["workspace_required"]
+
+    # Version-1 manifests predate the explicit fact and may belong to a live
+    # workspace run during a rolling upgrade, so preserve the old safe default.
+    return True
+
+
 class AgentRunRepository:
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
@@ -484,7 +505,7 @@ class AgentRunRepository:
         run.worker_id = None
         run.heartbeat_at = None
         run.lease_expires_at = None
-        run.runtime_cleanup_pending = run.run_type != "subagent"
+        run.runtime_cleanup_pending = _runtime_cleanup_required(run)
         run.updated_at = current_time
         await self._finish_open_attempt(
             run_id,
@@ -540,7 +561,7 @@ class AgentRunRepository:
             run.worker_id = None
             run.heartbeat_at = None
             run.lease_expires_at = None
-            run.runtime_cleanup_pending = run.run_type != "subagent"
+            run.runtime_cleanup_pending = _runtime_cleanup_required(run)
             await self._project_input_delivery_status(run)
             await self._close_open_attempts(
                 run.id,
@@ -619,7 +640,7 @@ class AgentRunRepository:
             run.error_message = "对话已在执行前取消"
             run.finished_at = current_time
             run.updated_at = current_time
-            run.runtime_cleanup_pending = False
+            run.runtime_cleanup_pending = _runtime_cleanup_required(run)
             await self._project_input_delivery_status(run)
             await self.db.flush()
             return
@@ -736,7 +757,7 @@ class AgentRunRepository:
         run.worker_id = None
         run.heartbeat_at = None
         run.lease_expires_at = None
-        run.runtime_cleanup_pending = run.run_type != "subagent"
+        run.runtime_cleanup_pending = _runtime_cleanup_required(run)
         await self._project_input_delivery_status(run)
         await self._finish_open_attempt(
             run.id,

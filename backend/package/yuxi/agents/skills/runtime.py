@@ -154,14 +154,34 @@ def _read_preloaded_skill_contents(slugs: list[str], skill_items: dict[str, Any]
 def resolve_skill_gated_tools(context) -> list:
     """解析所有可见 Skill 依赖且需注册到 ToolNode 的本地工具。"""
     runtime_skills = getattr(context, "_runtime_skills", {}) or {}
-    effective_skills = getattr(context, "_effective_skill_slugs", []) or []
     tool_names: set[str] = set()
-    for slug in effective_skills:
+    for slug in resolve_usable_skill_slugs(context):
         node = runtime_skills.get(slug) or {}
         tool_names.update(node.get("tools", []))
     if not tool_names:
         return []
     return [tool for tool in get_all_tool_instances() if tool.name in tool_names]
+
+
+def resolve_usable_skill_slugs(context) -> list[str]:
+    """返回当前工具装配下真正可激活的 Skill，并保持依赖展开顺序。"""
+
+    skill_scope = getattr(context, "_skill_runtime_snapshot", None)
+    if not isinstance(skill_scope, dict):
+        skill_scope = {}
+    effective = normalize_string_list(
+        getattr(context, "_effective_skill_slugs", None) or skill_scope.get("effective_skills")
+    )
+    if bool(getattr(context, "enable_workspace_tools", True)):
+        return effective
+
+    # Lazy Skill 只能由 read_file 激活；关闭 workspace tools 时仅保留已预加载内容。
+    preloaded = set(
+        normalize_string_list(
+            getattr(context, "_preloaded_skills", None) or skill_scope.get("preloaded_skills")
+        )
+    )
+    return [slug for slug in effective if slug in preloaded]
 
 
 def build_dependency_bundle(

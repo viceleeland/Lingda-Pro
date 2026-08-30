@@ -100,7 +100,7 @@ async def _build_middlewares(context, backend, tool_approval_mode: str):
         TodoListMiddleware(system_prompt=TODO_MID_PROMPT),
         PatchToolCallsMiddleware(),
         _SubAgentToolFilterMiddleware(tool_approval_mode),
-        ModelRetryMiddleware(),
+        ModelRetryMiddleware(on_failure="error"),
         ImageInputCompatibilityMiddleware(),
         TokenUsageMiddleware(),
     ]

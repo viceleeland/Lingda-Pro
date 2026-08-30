@@ -203,6 +203,7 @@ async def _run_install_task(
     tags=["skill", "安装"],
     display_name="安装技能",
     args_schema=InstallSkillInput,
+    requires_workspace_runtime=True,
 )
 async def install_skill(
     source: str,

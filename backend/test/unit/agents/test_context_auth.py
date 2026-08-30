@@ -6,6 +6,7 @@ import types
 from dataclasses import dataclass, field
 
 import pytest
+from yuxi.agents.buildin.chatbot.context import ChatBotContext as RuntimeChatBotContext
 from yuxi.knowledge.read_models import KnowledgeBaseSummary
 
 
@@ -68,6 +69,26 @@ def test_get_configurable_items_allows_admin_and_superadmin_fields():
     assert "summary_tool_result_token_limit" in admin_items
     assert "max_execution_steps" in admin_items
     assert "secret_setting" in superadmin_items
+
+
+def test_runtime_feature_switches_survive_normal_user_filtering():
+    filtered = filter_config_by_role(
+        {
+            "context": {
+                "enable_workspace_tools": False,
+                "enable_memory": False,
+                "enable_subagents": False,
+            }
+        },
+        "user",
+        context_schema=RuntimeChatBotContext,
+    )
+
+    assert filtered["context"] == {
+        "enable_workspace_tools": False,
+        "enable_memory": False,
+        "enable_subagents": False,
+    }
 
 
 def test_filter_config_by_role_removes_unauthorized_context_values():
@@ -178,7 +199,11 @@ async def test_lite_resource_options_exclude_persisted_knowledge_skill(monkeypat
 
 @pytest.mark.asyncio
 async def test_normalize_agent_context_config_expands_null_and_filters_explicit_lists(monkeypatch):
-    async def fake_get_databases_by_user(_user):
+    expected_db = object()
+    knowledge_calls = []
+
+    async def fake_get_databases_by_user(_user, *, db=None):
+        knowledge_calls.append(db)
         return [_knowledge_summary("kb-a"), _knowledge_summary("kb-b")]
 
     async def fake_get_all_mcp_servers(_db):
@@ -256,7 +281,7 @@ async def test_normalize_agent_context_config_expands_null_and_filters_explicit_
             "summary_tool_result_token_limit": 500,
             "max_execution_steps": 50,
         },
-        db=object(),
+        db=expected_db,
         user=types.SimpleNamespace(role="user", uid="u1", department_id=None),
         context_schema=ChatBotContext,
     )
@@ -267,6 +292,7 @@ async def test_normalize_agent_context_config_expands_null_and_filters_explicit_
     assert normalized["skills"] == []
     assert normalized["preload_skills"] == []
     assert normalized["subagents"] == ["research-agent"]
+    assert knowledge_calls == [expected_db]
     assert "summary_threshold" not in normalized
     assert "summary_keep_messages" not in normalized
     assert "summary_prompt" not in normalized
@@ -302,7 +328,8 @@ async def test_normalize_agent_context_config_expands_null_and_filters_explicit_
 
 @pytest.mark.asyncio
 async def test_prepare_agent_runtime_context_filters_resources_and_derives_runtime_scope(monkeypatch):
-    async def fake_get_databases_by_user(_user):
+    async def fake_get_databases_by_user(_user, *, db=None):
+        assert db is not None
         return [_knowledge_summary("kb-a"), _knowledge_summary("kb-b")]
 
     async def fake_get_all_mcp_servers(_db):
@@ -318,9 +345,16 @@ async def test_prepare_agent_runtime_context_filters_resources_and_derives_runti
             types.SimpleNamespace(slug="skill-b", name="Skill B", description=""),
         ]
 
-    async def fake_resolve_visible_knowledge_bases(context):
-        assert context.knowledges == ["kb-a"]
-        context._visible_knowledge_bases = [{"slug": "kb-a", "name": "Docs A"}]
+    visible_knowledge_calls = []
+
+    async def fake_resolve_visible_knowledge_bases(context, *, db=None, user=None):
+        visible_knowledge_calls.append((db, user.uid))
+        assert db is not None
+        assert user.uid == "u1"
+        assert context.knowledges == ["kb-a", "missing"]
+        context._visible_knowledge_bases = [
+            {"kb_id": "kb-a", "name": "Docs A", "description": "", "kb_type": "milvus"}
+        ]
         return context._visible_knowledge_bases
 
     async def fake_resolve_runtime_skills_for_context(
@@ -451,11 +485,14 @@ async def test_prepare_agent_runtime_context_filters_resources_and_derives_runti
     assert prepared.skills == ["skill-a"]
     assert prepared.preload_skills == ["skill-a"]
     assert prepared.subagents == ["research-agent"]
-    assert prepared._visible_knowledge_bases == [{"slug": "kb-a", "name": "Docs A"}]
+    assert prepared._visible_knowledge_bases == [
+        {"kb_id": "kb-a", "name": "Docs A", "description": "", "kb_type": "milvus"}
+    ]
     assert prepared._effective_skill_slugs == ["skill-a", "skill-b"]
     assert prepared._runtime_skills["skill-a"]["name"] == "Skill A"
     assert prepared._runtime_skills["skill-a"]["skills"] == ["skill-b"]
     assert prepared._preloaded_skills == ["skill-a", "skill-b"]
+    assert len(visible_knowledge_calls) == 1
 
 
 @pytest.mark.asyncio

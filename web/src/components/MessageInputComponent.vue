@@ -265,10 +265,11 @@
 
     <div class="send-button-container">
       <slot name="actions-right"></slot>
-      <a-tooltip :title="isLoading ? '停止回答' : ''">
+      <a-tooltip :title="sendButtonLabel">
         <a-button
           @click="handleSendOrStop"
           :disabled="sendButtonDisabled"
+          :aria-label="sendButtonLabel"
           type="link"
           class="send-button"
         >
@@ -1057,6 +1058,7 @@ const getIcon = computed(() => {
   }
   return iconComponents[props.sendIcon] || ArrowUpOutlined
 })
+const sendButtonLabel = computed(() => (props.isLoading ? '停止回答' : '发送消息'))
 
 // 创建本地引用以进行双向绑定
 const inputValue = computed({

@@ -1,6 +1,8 @@
 from langchain.messages import HumanMessage
 
-from yuxi.services.chat_service import _with_attachment_context
+from types import SimpleNamespace
+
+from yuxi.services.chat_service import _with_attachment_context, _with_available_attachment_context
 
 
 def test_attachment_context_is_added_only_to_model_message():
@@ -40,3 +42,15 @@ def test_attachment_context_ignores_records_without_paths():
     original = HumanMessage(content="继续")
 
     assert _with_attachment_context(original, [{"file_name": "missing"}]) is original
+
+
+def test_attachment_context_is_not_injected_without_workspace_tools():
+    original = HumanMessage(content="请总结附件")
+
+    model_message = _with_available_attachment_context(
+        original,
+        [{"file_name": "report.pdf", "path": "/uploads/report.pdf"}],
+        SimpleNamespace(enable_workspace_tools=False),
+    )
+
+    assert model_message is original

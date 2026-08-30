@@ -157,6 +157,13 @@ async def test_attempt_history_survives_retry_takeover_and_reconciliation(fact_d
         async with session_factory() as db:
             repository = AgentRunRepository(db)
             _, first_claim = await repository.mark_running(run_id, worker_id=owner_a, lease_seconds=60, now=now)
+            await repository.record_run_manifest(
+                run_id,
+                manifest={"manifest_version": 1, "runtime": {"workspace_required": True}},
+                fingerprint="f" * 64,
+                worker_id=owner_a,
+                now=now + timedelta(seconds=1),
+            )
             await db.commit()
         assert first_claim is True
 

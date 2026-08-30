@@ -267,6 +267,7 @@ PRESENT_ARTIFACTS_DESCRIPTION = """
     display_name="展示交付物",
     description=PRESENT_ARTIFACTS_DESCRIPTION,
     args_schema=PresentArtifactsInput,
+    requires_workspace_runtime=True,
 )
 def present_artifacts(
     filepaths: list[str],
@@ -316,6 +317,7 @@ OCR_PARSE_FILE_DESCRIPTION = """
     display_name="OCR 解析文件",
     description=OCR_PARSE_FILE_DESCRIPTION,
     args_schema=OcrParseFileInput,
+    requires_workspace_runtime=True,
 )
 async def ocr_parse_file(file_path: str, runtime: ToolRuntime, ocr_engine: str | None = None) -> dict:
     """Parse a sandbox file with OCR, persist Markdown output, and return only a short result summary."""

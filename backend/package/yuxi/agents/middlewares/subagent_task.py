@@ -264,18 +264,18 @@ class YuxiSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
                 return str(exc)
 
             subagent_service = _subagent_run_service_module()
+            subagent_run = subagent_service.serialize_subagent_run_state(run)
             payload = {
                 "status": run.status,
                 "run_id": run.id,
                 "thread_id": run.conversation_thread_id,
                 "subagent_slug": run.agent_slug,
-                "error": run.error_message,
+                "error": subagent_run.get("error"),
                 "progress": await get_agent_run_progress(run.id),
                 **subagent_service.subagent_run_urls(run.id),
             }
             if result:
                 payload["result"] = result
-            subagent_run = subagent_service.serialize_subagent_run_state(run)
             return _json_tool_command(payload, runtime.tool_call_id, subagent_run=subagent_run)
 
         async def asubagent_cancel(

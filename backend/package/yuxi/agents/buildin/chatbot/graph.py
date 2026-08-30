@@ -4,6 +4,7 @@ from langchain.agents.middleware import ModelRetryMiddleware, TodoListMiddleware
 
 from yuxi.agents import BaseAgent, load_chat_model, resolve_chat_model_spec
 from yuxi.agents.backends import (
+    context_requires_workspace_runtime,
     create_agent_composite_backend,
     create_agent_filesystem_middleware,
     sync_agent_context_skills,
@@ -37,15 +38,22 @@ from .state import ChatBotState
 
 async def _build_middlewares(context, backend):
     """构建中间件列表"""
+    workspace_tools_enabled = bool(getattr(context, "enable_workspace_tools", True))
+
     # summary middleware
     # 主 Agent 上下文优化：默认 100k tokens 触发压缩，压缩后保留最近 10 条消息
     summary_trigger_tokens = getattr(context, "summary_threshold", DEFAULT_SUMMARY_THRESHOLD_K) * 1024
     summary_keep_messages = getattr(context, "summary_keep_messages", DEFAULT_SUMMARY_KEEP_MESSAGES)
     summary_prompt = getattr(context, "summary_prompt", None) or DEFAULT_YUXI_SUMMARY_PROMPT
-    summary_tool_result_token_limit = getattr(
+    configured_tool_result_token_limit = getattr(
         context,
         "summary_tool_result_token_limit",
         DEFAULT_SUMMARY_TOOL_RESULT_TOKEN_LIMIT,
+    )
+    # 只有注册了文件系统中间件时模型才能读取被卸载的工具结果；
+    # 单纯因某个工具需要沙盒而创建 runtime，并不代表 read_file 可用。
+    summary_tool_result_token_limit = (
+        configured_tool_result_token_limit if workspace_tools_enabled else None
     )
     summary_l2_trigger_ratio = getattr(context, "summary_l2_trigger_ratio", DEFAULT_SUMMARY_L2_TRIGGER_RATIO)
     model_spec = resolve_chat_model_spec(context.model)
@@ -60,26 +68,33 @@ async def _build_middlewares(context, backend):
         l1_l2_trigger_ratio=summary_l2_trigger_ratio,
     )
 
-    middlewares = [
-        SteerMiddleware(),
-        create_agent_filesystem_middleware(
-            getattr(context, "tool_token_limit", DEFAULT_TOOL_RESULT_EVICTION_K_TOKENS) * 1024,
-            backend=backend,
-        ),
-        SkillsMiddleware(),
-    ]
-    memory_middleware = await create_memory_middleware(context)
-    if memory_middleware:
-        middlewares.append(memory_middleware)
-    subagent_middleware = await create_subagent_task_middleware(context)
-    if subagent_middleware:
-        middlewares.append(subagent_middleware)
+    middlewares = [SteerMiddleware()]
+    if workspace_tools_enabled:
+        middlewares.append(
+            create_agent_filesystem_middleware(
+                getattr(context, "tool_token_limit", DEFAULT_TOOL_RESULT_EVICTION_K_TOKENS) * 1024,
+                backend=backend,
+            )
+        )
+    middlewares.append(SkillsMiddleware())
+    if getattr(context, "enable_memory", True):
+        memory_middleware = await create_memory_middleware(context)
+        if memory_middleware:
+            middlewares.append(memory_middleware)
+    if getattr(context, "enable_subagents", True):
+        subagent_middleware = await create_subagent_task_middleware(context)
+        if subagent_middleware:
+            middlewares.append(subagent_middleware)
+    middlewares.append(summary_middleware)
+    if workspace_tools_enabled:
+        middlewares.append(TodoListMiddleware(system_prompt=TODO_MID_PROMPT))
     middlewares.extend(
         [
-            summary_middleware,
-            TodoListMiddleware(system_prompt=TODO_MID_PROMPT),
             PatchToolCallsMiddleware(),
-            ModelRetryMiddleware(max_retries=getattr(context, "model_retry_times", 2)),
+            ModelRetryMiddleware(
+                max_retries=getattr(context, "model_retry_times", 2),
+                on_failure="error",
+            ),
             ImageInputCompatibilityMiddleware(),
             TokenUsageMiddleware(),
         ]
@@ -108,7 +123,8 @@ class ChatbotAgent(BaseAgent):
             context or self.context_schema(),
             context_schema=self.context_schema,
         )
-        await sync_agent_context_skills(context)
+        if context_requires_workspace_runtime(context):
+            await sync_agent_context_skills(context)
 
         # DeepAgents 0.7 移除 backend factory：每次 graph 构造创建本 Run 独享的
         # CompositeBackend，filesystem 与 summary middleware 共用同一实例。

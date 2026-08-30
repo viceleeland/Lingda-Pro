@@ -243,6 +243,9 @@ async def test_stream_agent_resume_init_does_not_render_resume_input():
 @pytest.mark.asyncio
 async def test_stream_agent_resume_commits_before_stream_and_routes_subagent_chunks(monkeypatch):
     db = _FakeSession()
+    graph_calls = 0
+    saved_calls = []
+    graph_instance = None
 
     class FakeContext:
         def __init__(self):
@@ -270,11 +273,15 @@ async def test_stream_agent_resume_commits_before_stream_and_routes_subagent_chu
             )
 
         async def get_graph(self, context=None):
+            nonlocal graph_calls, graph_instance
+            graph_calls += 1
+
             class FakeGraph:
                 async def aget_state(self, _config):
                     return SimpleNamespace(values={})
 
-            return FakeGraph()
+            graph_instance = FakeGraph()
+            return graph_instance
 
     async def fake_resolve_agent_runtime(**_kwargs):
         return (
@@ -290,7 +297,8 @@ async def test_stream_agent_resume_commits_before_stream_and_routes_subagent_chu
             ),
         )
 
-    async def fake_save_messages_from_langgraph_state(**_kwargs):
+    async def fake_save_messages_from_langgraph_state(**kwargs):
+        saved_calls.append(kwargs)
         return None
 
     async def fake_check_and_handle_interrupts(*_args, **_kwargs):
@@ -366,6 +374,11 @@ async def test_stream_agent_resume_commits_before_stream_and_routes_subagent_chu
     assert finished["status"] == "finished"
     assert finished["meta"]["agent_slug"] == "main-agent"
     assert "agent_id" not in finished["meta"]
+    statuses = [chunk["status"] for chunk in chunks]
+    assert statuses.index("response_complete") < statuses.index("finished")
+    assert graph_calls == 1
+    assert saved_calls[-1]["graph"] is graph_instance
+    assert saved_calls[-1]["runtime_cleanup_required"] is True
 
     async def fail_output_persistence(**_kwargs):
         raise ValueError("output binding rejected")

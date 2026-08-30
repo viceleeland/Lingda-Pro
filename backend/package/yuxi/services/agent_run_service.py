@@ -63,6 +63,54 @@ from yuxi.utils.sse_utils import (
 RUN_PROGRESS_RECENT_EVENT_SCAN_LIMIT = 100
 RUN_PROGRESS_MESSAGE_LIMIT = 3
 RUN_PROGRESS_CONTENT_MAX_CHARS = 800
+_DEFAULT_PUBLIC_RUN_ERROR_MESSAGE = "运行失败，请稍后重试"
+_PUBLIC_RUN_ERROR_MESSAGES = {
+    "ask_user_question_required": "等待用户回答",
+    "cancelled": "对话已取消",
+    "content_guard_blocked": "输入内容包含敏感词",
+    "human_approval_required": "等待用户审批",
+    "interrupted": "对话已中断",
+    "invalid_agent": "智能体不可用",
+    "invalid_thread": "对话线程不存在",
+    "output_persistence_error": "最终输出持久化或绑定失败",
+}
+
+
+def public_run_error_message(error_type: object) -> str:
+    """按公开错误分类返回固定文案，不向客户端传递内部异常文本。"""
+
+    normalized_type = str(error_type or "").strip()
+    return _PUBLIC_RUN_ERROR_MESSAGES.get(normalized_type, _DEFAULT_PUBLIC_RUN_ERROR_MESSAGE)
+
+
+def _sanitize_public_run_error_data(value: Any) -> Any:
+    """递归清理对外 Run 投影中的错误文本，保留内部持久化事实。"""
+
+    if isinstance(value, list):
+        return [_sanitize_public_run_error_data(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    sanitized = {key: _sanitize_public_run_error_data(item) for key, item in value.items()}
+    error_type = sanitized.get("error_type")
+    if error_type is not None or sanitized.get("status") in {"error", "failed"}:
+        public_message = public_run_error_message(error_type)
+        if "error_message" in sanitized:
+            sanitized["error_message"] = public_message
+        if "message" in sanitized:
+            sanitized["message"] = public_message
+        if isinstance(sanitized.get("error"), str):
+            sanitized["error"] = public_message
+    return sanitized
+
+
+def _serialize_public_run(run) -> dict[str, Any]:
+    """序列化用户可见 Run，同时隐藏内部错误详情。"""
+
+    serialized = run.to_dict()
+    if serialized.get("error_type") is not None or serialized.get("error_message") is not None:
+        serialized["error_message"] = public_run_error_message(serialized.get("error_type"))
+    return serialized
 
 
 def _resolve_agent_run_request_id(
@@ -222,6 +270,7 @@ def _compact_tool_stream_event(event: dict) -> dict:
 
 
 def _compact_stream_chunk(chunk: dict) -> dict:
+    chunk = _sanitize_public_run_error_data(chunk)
     compact = {
         key: chunk[key]
         for key in (
@@ -812,7 +861,7 @@ async def get_agent_run_view(*, run_id: str, current_uid: str, db: AsyncSession)
     run = await repo.get_run_for_user(run_id, str(current_uid))
     if not run:
         raise HTTPException(status_code=404, detail="运行任务不存在")
-    return {"run": run.to_dict()}
+    return {"run": _serialize_public_run(run)}
 
 
 async def get_agent_run_result(*, run_id: str, current_uid: str, db: AsyncSession) -> dict:
@@ -851,7 +900,10 @@ async def get_agent_run_result(*, run_id: str, current_uid: str, db: AsyncSessio
         "token_usage": getattr(run, "token_usage", None) or {},
     }
     if run.error_type or run.error_message:
-        payload["error"] = {"type": run.error_type, "message": run.error_message}
+        payload["error"] = {
+            "type": run.error_type,
+            "message": public_run_error_message(run.error_type),
+        }
     return payload
 
 
@@ -919,7 +971,7 @@ async def request_cancel_agent_run(
 async def cancel_agent_run_view(*, run_id: str, current_uid: str, db: AsyncSession) -> dict:
     """HTTP 取消入口：取消父 run 时默认级联取消活跃子 run。"""
     run = await request_cancel_agent_run(run_id=run_id, current_uid=current_uid, db=db, cascade_children=True)
-    return {"run": run.to_dict() if run else None}
+    return {"run": _serialize_public_run(run) if run else None}
 
 
 async def stream_agent_run_events(
@@ -977,7 +1029,7 @@ async def stream_agent_run_events(
                 seq = str(event.get("seq") or "0-0")
                 last_seq = seq
                 event_type = event.get("event_type") or "message"
-                envelope = event.get("payload") or {}
+                envelope = _sanitize_public_run_error_data(event.get("payload") or {})
                 if not verbose and isinstance(envelope, dict):
                     envelope = _compact_run_event_envelope(envelope)
                     if envelope is None:
@@ -1048,5 +1100,5 @@ async def get_active_run_by_thread(*, thread_id: str, current_uid: str, db: Asyn
     )
     run = result.scalar_one_or_none()
     if run and run.status in ("pending", "running", "cancel_requested", "interrupted"):
-        return {"run": run.to_dict()}
+        return {"run": _serialize_public_run(run)}
     return {"run": None}

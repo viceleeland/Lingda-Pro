@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 from langchain.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.types import Command
+from yuxi.agents.backends import context_requires_workspace_runtime
 from yuxi.agents.backends.paths import runtime_workdir_path
 from yuxi.agents.backends.sandbox import ProvisionerSandboxBackend
 from yuxi.agents.base import _json_safe
@@ -80,14 +81,23 @@ def _with_attachment_context(message: HumanMessage, attachments: list[dict]) -> 
     return message.model_copy(update={"content": content})
 
 
+def _with_available_attachment_context(message: HumanMessage, attachments: list[dict], context) -> HumanMessage:
+    """仅在 read_file 可用时向模型注入附件路径。"""
+
+    if not bool(getattr(context, "enable_workspace_tools", True)):
+        return message
+    return _with_attachment_context(message, attachments)
+
+
 def _build_agent_context(agent, input_context: dict):
     context = agent.context_schema()
     context.update(input_context)
     return context
 
 
-async def _get_langgraph_messages(agent_instance, config_dict, *, context):
-    graph = await agent_instance.get_graph(context=context)
+async def _get_langgraph_messages(agent_instance, config_dict, *, context, graph: Any | None = None):
+    if graph is None:
+        graph = await agent_instance.get_graph(context=context)
     state = await graph.aget_state(config_dict)
 
     if not state or not state.values:
@@ -158,6 +168,21 @@ def _normalize_agent_artifact_path(path: object, workdir_path: str | None) -> ob
     return path
 
 
+def _visible_agent_files(files: Any) -> dict:
+    """Hide internal summary storage from the UI-facing file projection."""
+    if not isinstance(files, dict):
+        return {}
+
+    internal_directories = ("/outputs/conversation_history/", "/outputs/large_tool_results/")
+    visible = {}
+    for path, file_data in files.items():
+        normalized_path = "/" + str(path).replace("\\", "/").lstrip("/")
+        if any(directory in normalized_path for directory in internal_directories):
+            continue
+        visible[path] = file_data
+    return visible
+
+
 def extract_agent_state(values: dict, *, workdir_path: str | None = None) -> AgentStatePayload:
     """从 LangGraph state 中提取 agent 状态"""
     if not isinstance(values, dict):
@@ -170,7 +195,7 @@ def extract_agent_state(values: dict, *, workdir_path: str | None = None) -> Age
     token_usage = values.get("token_usage")
     result: AgentStatePayload = {
         "todos": list(todos)[:20] if todos else [],
-        "files": values.get("files") or {},
+        "files": _visible_agent_files(values.get("files")),
         "artifacts": [_normalize_agent_artifact_path(path, workdir_path) for path in artifacts] if artifacts else [],
         "subagent_runs": list(subagent_runs) if subagent_runs else [],
         "token_usage": dict(token_usage) if isinstance(token_usage, dict) else None,
@@ -617,8 +642,14 @@ async def save_messages_from_langgraph_state(
     interrupt_error_type: str | None = None,
     interrupt_error_message: str | None = None,
     token_usage: dict[str, Any] | None = None,
+    graph: Any | None = None,
+    runtime_cleanup_required: bool = True,
 ) -> bool:
-    """在有效 lease 锁内原子写入消息与完成或中断终态。"""
+    """在有效 lease 锁内原子写入消息与完成或中断终态。
+
+    ``runtime_cleanup_required`` 应与本次执行是否物化工作区 runtime 保持一致。
+    未创建 runtime 的轻量 Agent 可在同一事务中直接清除 cleanup fence。
+    """
 
     if complete_run and interrupt_run:
         raise ValueError("AgentRun 不能同时完成和中断")
@@ -638,7 +669,7 @@ async def save_messages_from_langgraph_state(
             if locked_run is None:
                 raise ValueError(f"AgentRun 不存在: {run_id}")
 
-        messages = await _get_langgraph_messages(agent_instance, config_dict, context=context)
+        messages = await _get_langgraph_messages(agent_instance, config_dict, context=context, graph=graph)
         existing_ids = await _get_existing_message_ids(conv_repo, thread_id)
         last_ai_message = None
         for msg in messages or []:
@@ -695,6 +726,8 @@ async def save_messages_from_langgraph_state(
                 )
                 if terminal_run is None or not changed:
                     raise ValueError(f"AgentRun 输出已写入但 {terminal_status} 终态未能在同一事务提交")
+                if not runtime_cleanup_required:
+                    terminal_run.runtime_cleanup_pending = False
                 cancelled_descendants = await run_repo.cancel_active_execution_tree_descendants(terminal_run)
             await conv_repo.db.commit()
             await _publish_execution_tree_cancel_signals(cancelled_descendants)
@@ -889,9 +922,11 @@ async def check_and_handle_interrupts(
     meta: dict,
     thread_id: str,
     context,
+    graph: Any | None = None,
 ) -> AsyncIterator[bytes]:
     try:
-        graph = await agent.get_graph(context=context)
+        if graph is None:
+            graph = await agent.get_graph(context=context)
         state = await graph.aget_state(langgraph_config)
 
         if not state or not state.values:
@@ -1074,7 +1109,7 @@ async def stream_agent_chat(
         thread_attachments = [
             serialize_attachment(attachment, thread_id=thread_id) for attachment in thread_attachment_records
         ]
-        messages = [_with_attachment_context(human_message, thread_attachments)]
+        messages = [_with_available_attachment_context(human_message, thread_attachments, context)]
 
         init_msg = {
             "role": "user",
@@ -1109,15 +1144,17 @@ async def stream_agent_chat(
 
         # 智能体流式执行期间不访问业务数据库，先结束预处理事务并归还连接池。
         await db.commit()
-        await _ensure_persistent_sandbox(
-            runtime_scope_id=runtime_scope_id,
-            uid=uid,
-            workdir_path=workdir_path,
-        )
+        if context_requires_workspace_runtime(context):
+            await _ensure_persistent_sandbox(
+                runtime_scope_id=runtime_scope_id,
+                uid=uid,
+                workdir_path=workdir_path,
+            )
 
         # 先构建 langgraph_config
         langgraph_config = {"configurable": {"thread_id": thread_id, "uid": uid}}
 
+        graph = await agent.get_graph(context=context)
         protocol_message_ids: dict[tuple[str, str], str] = {}
         async for mode, payload in _stream_agent_events(
             agent,
@@ -1126,6 +1163,8 @@ async def stream_agent_chat(
             callbacks=langfuse_run.callbacks,
             metadata=langfuse_run.metadata,
             tags=langfuse_run.tags,
+            context=context,
+            graph=graph,
         ):
             if mode == "values":
                 agent_state = extract_agent_state(
@@ -1236,14 +1275,24 @@ async def stream_agent_chat(
         interrupted = False
         interrupt_error_type = None
         interrupt_error_message = None
-        async for chunk in check_and_handle_interrupts(agent, langgraph_config, make_chunk, meta, thread_id, context):
+        async for chunk in check_and_handle_interrupts(
+            agent,
+            langgraph_config,
+            make_chunk,
+            meta,
+            thread_id,
+            context,
+            graph=graph,
+        ):
             interrupted = True
             interrupt_error_type, interrupt_error_message = _interrupt_terminal_details(chunk)
             yield chunk
 
+        if not interrupted:
+            yield make_chunk(status="response_complete", meta=meta)
+
         meta["time_cost"] = asyncio.get_event_loop().time() - start_time
         try:
-            graph = await agent.get_graph(context=context)
             state = await graph.aget_state(langgraph_config)
             agent_state = (
                 extract_agent_state(getattr(state, "values", {}), workdir_path=meta.get("workdir_path"))
@@ -1275,6 +1324,8 @@ async def stream_agent_chat(
                 interrupt_error_type=interrupt_error_type,
                 interrupt_error_message=interrupt_error_message,
                 token_usage=_current_run_token_usage(agent_state, meta.get("run_id")),
+                graph=graph,
+                runtime_cleanup_required=context_requires_workspace_runtime(context),
             )
         except Exception as e:
             logger.exception(f"Error saving messages from LangGraph state: {e}")
@@ -1372,11 +1423,6 @@ async def stream_agent_resume(
     meta["runtime_scope_id"] = runtime_scope_id
     meta["workdir_relative_path"] = workdir_path
     meta["workdir_path"] = runtime_workdir_path(workdir_path)
-    await _ensure_persistent_sandbox(
-        runtime_scope_id=runtime_scope_id,
-        uid=uid,
-        workdir_path=workdir_path,
-    )
     input_context = await build_agent_input_context(
         _runtime_agent_config(agent_config, execution_snapshot),
         thread_id=thread_id,
@@ -1393,6 +1439,13 @@ async def stream_agent_resume(
     context = _build_agent_context(agent, input_context)
     if isinstance(execution_snapshot, dict):
         setattr(context, "_skill_runtime_snapshot", execution_snapshot.get("skill_runtime_snapshot"))
+    if context_requires_workspace_runtime(context):
+        await _ensure_persistent_sandbox(
+            runtime_scope_id=runtime_scope_id,
+            uid=uid,
+            workdir_path=workdir_path,
+        )
+    graph = await agent.get_graph(context=context)
     langfuse_run = _build_langfuse_run_context(
         current_user=current_user,
         thread_id=thread_id,
@@ -1412,6 +1465,8 @@ async def stream_agent_resume(
         callbacks=langfuse_run.callbacks,
         metadata=langfuse_run.metadata,
         tags=langfuse_run.tags,
+        context=context,
+        graph=graph,
     )
 
     protocol_message_ids: dict[tuple[str, str], str] = {}
@@ -1482,16 +1537,24 @@ async def stream_agent_resume(
         interrupt_error_type = None
         interrupt_error_message = None
         async for chunk in check_and_handle_interrupts(
-            agent, langgraph_config, make_resume_chunk, meta, thread_id, context
+            agent,
+            langgraph_config,
+            make_resume_chunk,
+            meta,
+            thread_id,
+            context,
+            graph=graph,
         ):
             interrupted = True
             interrupt_error_type, interrupt_error_message = _interrupt_terminal_details(chunk)
             yield chunk
 
+        if not interrupted:
+            yield make_resume_chunk(status="response_complete", meta=meta)
+
         meta["time_cost"] = asyncio.get_event_loop().time() - start_time
 
         try:
-            graph = await agent.get_graph(context=context)
             state = await graph.aget_state(langgraph_config)
             agent_state = (
                 extract_agent_state(getattr(state, "values", {}), workdir_path=meta.get("workdir_path"))
@@ -1522,6 +1585,8 @@ async def stream_agent_resume(
                 interrupt_error_type=interrupt_error_type,
                 interrupt_error_message=interrupt_error_message,
                 token_usage=_current_run_token_usage(agent_state, meta.get("run_id")),
+                graph=graph,
+                runtime_cleanup_required=context_requires_workspace_runtime(context),
             )
         except Exception as e:
             logger.exception(f"Error saving messages from LangGraph state: {e}")

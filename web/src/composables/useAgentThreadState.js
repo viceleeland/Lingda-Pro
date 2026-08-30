@@ -22,6 +22,7 @@ export function useAgentThreadState({
   const resetThreadUiState = (threadState) => {
     if (!threadState) return
     threadState.replyLoadingVisible = false
+    threadState.responseCompleted = false
     threadState.pendingRequestId = null
   }
 
@@ -33,6 +34,7 @@ export function useAgentThreadState({
         runStreamAbortController: null,
         activeRunId: null,
         activeRunSteerable: false,
+        responseCompleted: false,
         runLastSeq: '0-0',
         lastRetryableJobTry: null,
         replyLoadingVisible: false,

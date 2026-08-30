@@ -25,6 +25,149 @@ def _sse_data(chunk: str) -> dict:
     raise AssertionError(f"SSE chunk has no data line: {chunk}")
 
 
+def test_public_run_error_sanitizer_hides_unknown_details_and_uses_fixed_allowlist_messages():
+    internal_detail = "database connection failed at postgresql://internal-host/private"
+    payload = {
+        "payload": {
+            "chunk": {
+                "status": "error",
+                "error_type": "worker_error",
+                "error_message": internal_detail,
+                "message": internal_detail,
+            },
+            "subagent": {"status": "failed", "error": internal_detail},
+        }
+    }
+
+    sanitized = agent_run_service._sanitize_public_run_error_data(payload)
+
+    assert sanitized["payload"]["chunk"]["error_message"] == "运行失败，请稍后重试"
+    assert sanitized["payload"]["chunk"]["message"] == "运行失败，请稍后重试"
+    assert sanitized["payload"]["subagent"]["error"] == "运行失败，请稍后重试"
+    assert internal_detail not in json.dumps(sanitized, ensure_ascii=False)
+    assert (
+        agent_run_service.public_run_error_message("output_persistence_error")
+        == "最终输出持久化或绑定失败"
+    )
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.asyncio
+async def test_stream_agent_run_events_redacts_internal_error_for_all_payload_modes(
+    monkeypatch: pytest.MonkeyPatch,
+    verbose: bool,
+):
+    internal_detail = "database connection failed at postgresql://internal-host/private"
+
+    @asynccontextmanager
+    async def fake_session_ctx():
+        yield object()
+
+    class Repo:
+        def __init__(self, _db):
+            pass
+
+        async def get_run_for_user(self, run_id: str, uid: str):
+            assert (run_id, uid) == ("run-1", "user-1")
+            return SimpleNamespace(
+                status="failed",
+                runtime_cleanup_pending=False,
+                conversation_thread_id="thread-1",
+                request_id="request-1",
+            )
+
+    async def fake_list_events(_run_id: str, *, after_seq: str, limit: int):
+        assert (after_seq, limit) == ("0-0", 200)
+        error_chunk = {
+            "status": "error",
+            "error_type": "worker_error",
+            "error_message": internal_detail,
+            "message": internal_detail,
+            "request_id": "request-1",
+        }
+        return [
+            {
+                "seq": "1-0",
+                "event_type": "error",
+                "payload": {
+                    "run_id": "run-1",
+                    "thread_id": "thread-1",
+                    "event": "error",
+                    "payload": {"chunk": error_chunk, "retryable": False},
+                },
+            },
+            {
+                "seq": "2-0",
+                "event_type": "end",
+                "payload": {
+                    "run_id": "run-1",
+                    "thread_id": "thread-1",
+                    "event": "end",
+                    "payload": {"status": "failed", "chunk": error_chunk},
+                },
+            },
+        ]
+
+    monkeypatch.setattr(agent_run_service.pg_manager, "get_async_session_context", fake_session_ctx)
+    monkeypatch.setattr(agent_run_service, "AgentRunRepository", Repo)
+    monkeypatch.setattr(agent_run_service, "list_run_stream_events", fake_list_events)
+
+    chunks = []
+    async for chunk in agent_run_service.stream_agent_run_events(
+        run_id="run-1",
+        after_seq="0-0",
+        current_uid="user-1",
+        verbose=verbose,
+    ):
+        chunks.append(chunk)
+
+    serialized = "".join(chunks)
+    assert internal_detail not in serialized
+    assert "运行失败，请稍后重试" in serialized
+
+
+@pytest.mark.asyncio
+async def test_run_view_and_result_redact_internal_error_without_mutating_source(monkeypatch: pytest.MonkeyPatch):
+    internal_detail = "resume failed at D:\\workspace\\runtime"
+    run_data = {
+        "id": "run-1",
+        "status": "failed",
+        "error_type": "worker_error",
+        "error_message": internal_detail,
+    }
+    run = SimpleNamespace(
+        id="run-1",
+        status="failed",
+        agent_slug="default-chatbot",
+        conversation_thread_id="thread-1",
+        conversation_id=None,
+        request_id="request-1",
+        output_message_id=None,
+        error_type="worker_error",
+        error_message=internal_detail,
+        token_usage={},
+        to_dict=lambda: dict(run_data),
+    )
+
+    class Repo:
+        def __init__(self, _db):
+            pass
+
+        async def get_run_for_user(self, run_id: str, uid: str):
+            assert (run_id, uid) == ("run-1", "user-1")
+            return run
+
+    monkeypatch.setattr(agent_run_service, "AgentRunRepository", Repo)
+
+    view = await agent_run_service.get_agent_run_view(run_id="run-1", current_uid="user-1", db=object())
+    result = await agent_run_service.get_agent_run_result(run_id="run-1", current_uid="user-1", db=object())
+
+    assert view["run"]["error_message"] == "运行失败，请稍后重试"
+    assert result["error"] == {"type": "worker_error", "message": "运行失败，请稍后重试"}
+    assert run.error_message == internal_detail
+    assert run_data["error_message"] == internal_detail
+
+
 def test_openai_content_parts_build_and_restore_multimodal_message():
     input_message = build_chat_input_message_from_openai_content(
         [

@@ -11,6 +11,62 @@ from yuxi.services import chat_service as svc
 from yuxi.services.input_message_service import build_chat_input_message
 
 
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    [
+        (SimpleNamespace(enable_workspace_tools=False, enable_subagents=False), False),
+        (SimpleNamespace(enable_workspace_tools=False, enable_subagents=True), True),
+        (SimpleNamespace(enable_workspace_tools=True, enable_subagents=False), True),
+        (
+            SimpleNamespace(
+                enable_workspace_tools=False,
+                enable_subagents=False,
+                _skill_runtime_snapshot={
+                    "effective_skills": ["knowledge-base"],
+                    "preloaded_skills": ["knowledge-base"],
+                    "runtime_skills": {"knowledge-base": {"tools": ["download_kb_file"]}},
+                },
+            ),
+            True,
+        ),
+        (SimpleNamespace(), True),
+    ],
+)
+def test_workspace_runtime_requirement_preserves_subagent_runtime(context, expected: bool) -> None:
+    assert svc.context_requires_workspace_runtime(context) is expected
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["download_kb_file", "ocr_parse_file", "present_artifacts", "install_skill"],
+)
+def test_registered_workspace_tools_require_runtime(tool_name: str) -> None:
+    context = SimpleNamespace(
+        enable_workspace_tools=False,
+        enable_subagents=False,
+        tools=[tool_name],
+    )
+
+    assert svc.context_requires_workspace_runtime(context) is True
+
+
+def test_extract_agent_state_hides_internal_summary_files() -> None:
+    user_file = "/outputs/report.md"
+    state = svc.extract_agent_state(
+        {
+            "files": {
+                user_file: {"content": "report"},
+                "/outputs/conversation_history/summary.txt": {"content": "summary"},
+                "/home/gem/user-data/projects/p1/outputs/large_tool_results/query.txt": {
+                    "content": "tool output"
+                },
+            }
+        }
+    )
+
+    assert state["files"] == {user_file: {"content": "report"}}
+
+
 @pytest.fixture
 def stub_system_options(monkeypatch: pytest.MonkeyPatch):
     async def get_system_options(_option, _db=None):
@@ -55,9 +111,12 @@ async def _fake_save_messages_from_langgraph_state(
     interrupt_error_type=None,
     interrupt_error_message=None,
     token_usage=None,
+    graph=None,
+    runtime_cleanup_required=True,
 ):
     del agent_instance, thread_id, conv_repo, config_dict, context, trace_info
-    del run_id, request_id, worker_id, interrupt_error_type, interrupt_error_message, token_usage
+    del run_id, request_id, worker_id, interrupt_error_type, interrupt_error_message, token_usage, graph
+    del runtime_cleanup_required
     return complete_run or interrupt_run
 
 
@@ -69,7 +128,8 @@ async def _fake_guard_check_with_keywords(_content):
     return False
 
 
-async def _fake_interrupts(agent, langgraph_config, make_chunk, meta, thread_id, context):
+async def _fake_interrupts(agent, langgraph_config, make_chunk, meta, thread_id, context, graph=None):
+    del graph
     if False:
         yield None
     return
@@ -303,11 +363,14 @@ async def test_stream_agent_chat_commits_before_stream_and_persists_langfuse_con
             yield "messages", (AIMessageChunk(content="hello"), {"node": "llm"})
 
         async def get_graph(self, *, context=None):
+            calls["get_graph_count"] = calls.get("get_graph_count", 0) + 1
+
             class FakeGraph:
                 async def aget_state(self, config):
                     return SimpleNamespace(values={"messages": [], "files": {}, "artifacts": []})
 
-            return FakeGraph()
+            calls["graph"] = FakeGraph()
+            return calls["graph"]
 
     async def fake_save_messages_from_langgraph_state(
         *,
@@ -325,6 +388,8 @@ async def test_stream_agent_chat_commits_before_stream_and_persists_langfuse_con
         interrupt_error_type=None,
         interrupt_error_message=None,
         token_usage=None,
+        graph=None,
+        runtime_cleanup_required=True,
     ):
         calls["saved_state"] = {
             "thread_id": thread_id,
@@ -339,6 +404,8 @@ async def test_stream_agent_chat_commits_before_stream_and_persists_langfuse_con
             "interrupt_error_type": interrupt_error_type,
             "interrupt_error_message": interrupt_error_message,
             "token_usage": token_usage,
+            "graph": graph,
+            "runtime_cleanup_required": runtime_cleanup_required,
         }
         return complete_run or interrupt_run
 
@@ -347,6 +414,8 @@ async def test_stream_agent_chat_commits_before_stream_and_persists_langfuse_con
         agent=FakeAgent(),
         runtime_context={
             "temperature": 0.1,
+            "enable_workspace_tools": False,
+            "enable_subagents": False,
         },
         conversation=SimpleNamespace(
             id=1,
@@ -384,6 +453,11 @@ async def test_stream_agent_chat_commits_before_stream_and_persists_langfuse_con
         flush_langfuse=lambda: calls.setdefault("flushed", True),
     )
 
+    async def fail_if_sandbox_is_created(**_kwargs):
+        pytest.fail("workspace-disabled agent must not create a sandbox")
+
+    monkeypatch.setattr(svc, "_ensure_persistent_sandbox", fail_if_sandbox_is_created)
+
     chunks = []
     async for chunk in svc.stream_agent_chat(
         agent_slug="test-agent",
@@ -409,11 +483,11 @@ async def test_stream_agent_chat_commits_before_stream_and_persists_langfuse_con
         "callbacks": ["handler-1"],
         "metadata": {"langfuse_user_id": "user-1", "langfuse_session_id": "thread-1"},
         "tags": ["yuxi", "chat"],
+        "context": calls["saved_state"]["context"],
+        "graph": calls["graph"],
     }
     model_message = calls["stream_messages"][0]
-    assert model_message.content.startswith("hello\n\n<attachment_context>")
-    assert "current.txt" in model_message.content
-    assert "history.txt" in model_message.content
+    assert model_message.content == "hello"
     assert calls["saved_state"]["trace_info"] == {
         "langfuse_trace_id": "trace-runtime",
         "langfuse_session_id": "thread-1",
@@ -422,6 +496,11 @@ async def test_stream_agent_chat_commits_before_stream_and_persists_langfuse_con
     assert calls["saved_state"]["context"].uid == "user-1"
     assert calls["saved_state"]["context"].temperature == 0.1
     assert calls["saved_state"]["complete_run"] is True
+    assert calls["saved_state"]["graph"] is calls["graph"]
+    assert calls["saved_state"]["runtime_cleanup_required"] is False
+    assert calls["get_graph_count"] == 1
+    statuses = [chunk["status"] for chunk in chunks]
+    assert statuses.index("response_complete") < statuses.index("finished")
     assert chunks[-1]["status"] == "finished"
     assert calls["stream_input_context"]["workdir_relative_path"] == "projects/11111111-1111-4111-8111-111111111111"
     assert (

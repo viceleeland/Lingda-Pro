@@ -193,10 +193,20 @@ class BaseAgent:
         ):
             yield msg, metadata
 
-    async def _stream_input_with_state(self, graph_input, input_context=None, **kwargs):
-        context = self.context_schema()
-        context.update_from_dict(input_context or {})
-        graph = await self.get_graph(context=context)
+    async def _stream_input_with_state(
+        self,
+        graph_input,
+        input_context=None,
+        *,
+        context=None,
+        graph: CompiledStateGraph | None = None,
+        **kwargs,
+    ):
+        if context is None:
+            context = self.context_schema()
+            context.update_from_dict(input_context or {})
+        if graph is None:
+            graph = await self.get_graph(context=context)
         logger.debug(f"stream_with_state: {context=}")
 
         input_config = {

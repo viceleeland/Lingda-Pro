@@ -186,3 +186,104 @@ async def test_run_events_verbose_false_returns_compact_payload(test_client, sta
             await conn.execute("DELETE FROM agent_runs WHERE id = $1", run_id)
         finally:
             await conn.close()
+
+
+async def test_run_error_apis_redact_internal_details_but_keep_database_fact(test_client, standard_user):
+    uid = str(standard_user["user"]["uid"])
+    run_id = str(uuid.uuid4())
+    thread_id = str(uuid.uuid4())
+    request_id = f"req-{uuid.uuid4()}"
+    internal_detail = "database connection failed at postgresql://internal-host/private"
+    public_detail = "运行失败，请稍后重试"
+
+    conn = await asyncpg.connect(_postgres_dsn())
+    try:
+        await conn.execute(
+            """
+            INSERT INTO agent_runs
+                (id, conversation_thread_id, agent_slug, uid, request_id, input_payload,
+                 status, run_type, error_type, error_message, runtime_cleanup_pending)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, FALSE)
+            """,
+            run_id,
+            thread_id,
+            "deep-research",
+            uid,
+            request_id,
+            json.dumps({"query": "trigger failure"}),
+            "failed",
+            "chat",
+            "worker_error",
+            internal_detail,
+        )
+    finally:
+        await conn.close()
+
+    error_chunk = {
+        "status": "error",
+        "error_type": "worker_error",
+        "error_message": internal_detail,
+        "message": internal_detail,
+        "request_id": request_id,
+    }
+    try:
+        await append_run_stream_event(
+            run_id,
+            "error",
+            {"chunk": error_chunk, "retryable": False},
+            thread_id=thread_id,
+        )
+        await append_run_stream_event(
+            run_id,
+            "end",
+            {"status": "failed", "chunk": error_chunk},
+            thread_id=thread_id,
+        )
+
+        for verbose in (False, True):
+            async with test_client.stream(
+                "GET",
+                f"/api/agent/runs/{run_id}/events",
+                params={"verbose": str(verbose).lower()},
+                headers=standard_user["headers"],
+            ) as response:
+                assert response.status_code == 200, response.text
+                payloads = await _collect_sse_payloads(response)
+
+            serialized_events = json.dumps(payloads, ensure_ascii=False)
+            assert internal_detail not in serialized_events
+            assert public_detail in serialized_events
+
+        result_response = await test_client.get(
+            f"/api/agent/runs/{run_id}/result",
+            headers=standard_user["headers"],
+        )
+        run_response = await test_client.get(
+            f"/api/agent/runs/{run_id}",
+            headers=standard_user["headers"],
+        )
+        assert result_response.status_code == 200, result_response.text
+        assert result_response.json()["error"] == {
+            "type": "worker_error",
+            "message": public_detail,
+        }
+        assert run_response.status_code == 200, run_response.text
+        assert run_response.json()["run"]["error_message"] == public_detail
+
+        conn = await asyncpg.connect(_postgres_dsn())
+        try:
+            persisted_detail = await conn.fetchval(
+                "SELECT error_message FROM agent_runs WHERE id = $1",
+                run_id,
+            )
+        finally:
+            await conn.close()
+        assert persisted_detail == internal_detail
+    finally:
+        redis = await get_redis_client()
+        await redis.delete(f"run:events:{run_id}")
+        conn = await asyncpg.connect(_postgres_dsn())
+        try:
+            await conn.execute("DELETE FROM agent_runs WHERE id = $1", run_id)
+        finally:
+            await conn.close()

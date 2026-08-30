@@ -13,6 +13,7 @@ from yuxi.repositories.agent_repository import (
     GENERAL_PURPOSE_AGENT_NAME,
     GENERAL_PURPOSE_AGENT_SLUG,
     SUB_AGENT_BACKEND_ID,
+    project_agent_capabilities,
     user_can_access_agent,
     user_can_manage_agent,
 )
@@ -34,6 +35,24 @@ _MANAGER_USER_SCOPE = {
     "read_scope": {"access_level": "user", "user_uids": ["manager"]},
     "manage_scope": {"access_level": "user", "user_uids": ["manager"]},
 }
+
+
+def test_workspace_disabled_agent_hides_file_capabilities():
+    capabilities = project_agent_capabilities(
+        ["file_upload", "files", "web_search"],
+        {"context": {"enable_workspace_tools": False}},
+    )
+
+    assert capabilities == ["web_search"]
+
+
+def test_workspace_enabled_agent_keeps_file_capabilities():
+    capabilities = project_agent_capabilities(
+        ["file_upload", "files"],
+        {"context": {"enable_workspace_tools": True}},
+    )
+
+    assert capabilities == ["file_upload", "files"]
 
 
 def _agent_for_update(*, slug="shared-bot", name="Shared Bot", created_by="owner", share_config=_MANAGER_USER_SCOPE):

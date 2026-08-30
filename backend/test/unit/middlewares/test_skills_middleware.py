@@ -136,6 +136,47 @@ async def test_preloaded_skill_injects_full_instructions_once_and_hides_lazy_rea
 
 
 @pytest.mark.asyncio
+async def test_workspace_disabled_context_hides_unloadable_lazy_skills():
+    context = SimpleNamespace(
+        enable_workspace_tools=False,
+        _effective_skill_slugs=["alpha", "beta"],
+        _preloaded_skills=["alpha"],
+        _preloaded_skill_contents={"alpha": "# Alpha full instructions\nUSE_ALPHA_TOOL"},
+        _runtime_skills={
+            "alpha": _runtime_skill("alpha", name="Alpha", description="alpha desc"),
+            "beta": _runtime_skill("beta", name="Beta", description="must stay hidden"),
+        },
+        tools=[],
+        mcps=[],
+    )
+
+    class FakeRequest:
+        def __init__(self, *, system_message=None, tools=None):
+            self.runtime = SimpleNamespace(context=context)
+            self.state = {}
+            self.tools = tools or []
+            self.system_message = system_message or SystemMessage(content="base")
+
+        def override(self, **kwargs):
+            return FakeRequest(
+                system_message=kwargs.get("system_message", self.system_message),
+                tools=kwargs.get("tools", self.tools),
+            )
+
+    captured = {}
+
+    async def handler(request):
+        captured["system_message"] = request.system_message
+        return "ok"
+
+    assert await SkillsMiddleware().awrap_model_call(FakeRequest(), handler) == "ok"
+    prompt_text = _system_message_text(captured["system_message"])
+    assert "# Alpha full instructions" in prompt_text
+    assert "Beta" not in prompt_text
+    assert "/home/gem/skills/beta/SKILL.md" not in prompt_text
+
+
+@pytest.mark.asyncio
 async def test_awrap_model_call_mounts_dependencies_only_for_readable_activated_skills(monkeypatch):
     monkeypatch.setattr(
         skills_middleware,
@@ -241,6 +282,22 @@ async def test_resolve_skill_gated_tools_registers_kb_tools():
 
     runtime_tools = await resolve_configured_runtime_tools(context)
     assert _KB_TOOL_NAMES <= {tool.name for tool in runtime_tools}
+
+
+def test_workspace_disabled_context_registers_only_preloaded_skill_tools():
+    context = SimpleNamespace(
+        enable_workspace_tools=False,
+        tools=None,
+        mcps=None,
+        _effective_skill_slugs=["knowledge-base"],
+        _preloaded_skills=[],
+        _runtime_skills={"knowledge-base": _runtime_skill("knowledge-base", tools=sorted(_KB_TOOL_NAMES))},
+    )
+
+    assert resolve_skill_gated_tools(context) == []
+
+    context._preloaded_skills = ["knowledge-base"]
+    assert {tool.name for tool in resolve_skill_gated_tools(context)} == _KB_TOOL_NAMES
 
 
 @pytest.mark.asyncio

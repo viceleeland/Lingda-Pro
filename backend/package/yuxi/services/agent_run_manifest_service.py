@@ -77,6 +77,7 @@ def build_manifest_payload(
     skill_entries: list[dict],
     code_revision: str | None,
     limits: dict,
+    workspace_runtime_required: bool = False,
 ) -> dict:
     """从已解析的执行资产组装 manifest；直接字段仅限稳定标识、摘要与关键 limit。
 
@@ -97,6 +98,9 @@ def build_manifest_payload(
             "tools": _resource_keys(normalized_context.get("tools")),
             "mcps": _resource_keys(normalized_context.get("mcps")),
             "skills": skill_entries,
+        },
+        "runtime": {
+            "workspace_required": bool(workspace_runtime_required),
         },
         "limits": limits,
         "config_digest": compute_config_digest(normalized_context),
@@ -164,6 +168,24 @@ def resolve_code_revision() -> str | None:
     return revision or None
 
 
+def _workspace_runtime_required(
+    backend: Any | None,
+    normalized_context: dict,
+    runtime_skill_snapshot: dict,
+) -> bool:
+    """Derive the persisted workspace-runtime fact from the same context used to build the graph."""
+
+    if backend is None:
+        return False
+
+    from yuxi.agents.backends import context_requires_workspace_runtime
+
+    context_instance = backend.context_schema()
+    context_instance.update_from_dict(dict(normalized_context))
+    setattr(context_instance, "_skill_runtime_snapshot", runtime_skill_snapshot)
+    return context_requires_workspace_runtime(context_instance)
+
+
 async def build_run_manifest_result(*, run: AgentRun, user: User, db: AsyncSession) -> RunManifestBuildResult:
     """在执行边界构建 manifest 与不可分叉的运行时快照。"""
     agent_item = await AgentRepository(db).get_visible_by_slug(
@@ -200,6 +222,11 @@ async def build_run_manifest_result(*, run: AgentRun, user: User, db: AsyncSessi
         model_spec=payload.get("model_spec"),
         tool_approval_mode=payload.get("tool_approval_mode"),
         normalized_context=normalized_context,
+        workspace_runtime_required=_workspace_runtime_required(
+            backend,
+            normalized_context,
+            runtime_skill_snapshot,
+        ),
         limits=effective_limits,
         skill_entries=await resolve_skill_entries(
             db,

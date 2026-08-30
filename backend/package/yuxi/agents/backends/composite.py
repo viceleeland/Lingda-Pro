@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from deepagents.backends import CompositeBackend
+from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.middleware.filesystem import (
     TOOLS_EXCLUDED_FROM_EVICTION,
     FilesystemMiddleware,
@@ -107,6 +107,39 @@ class _BackendScope:
         )
 
 
+def context_requires_workspace_runtime(context) -> bool:
+    """Return whether an Agent may create or share a sandbox-backed workspace."""
+    workspace_tools_enabled = bool(getattr(context, "enable_workspace_tools", True))
+    subagents_enabled = bool(getattr(context, "enable_subagents", True))
+    if workspace_tools_enabled or subagents_enabled:
+        return True
+
+    skill_scope = getattr(context, "_skill_runtime_snapshot", None)
+    if not isinstance(skill_scope, dict):
+        skill_scope = {
+            "effective_skills": getattr(context, "_effective_skill_slugs", []) or [],
+            "runtime_skills": getattr(context, "_runtime_skills", {}) or {},
+        }
+    tool_names = {
+        str(tool_name).strip()
+        for tool_name in (getattr(context, "tools", None) or [])
+        if str(tool_name).strip()
+    }
+    runtime_skills = skill_scope.get("runtime_skills") or {}
+    from yuxi.agents.skills.runtime import resolve_usable_skill_slugs
+
+    for slug in resolve_usable_skill_slugs(context):
+        tool_names.update((runtime_skills.get(slug) or {}).get("tools") or [])
+
+    from yuxi.agents.toolkits.registry import get_extra_metadata
+
+    for tool_name in tool_names:
+        metadata = get_extra_metadata(tool_name)
+        if metadata and metadata.requires_workspace_runtime:
+            return True
+    return False
+
+
 async def sync_agent_context_skills(context) -> None:
     """在 Agent Run 初始化时同步当前用户获授权的共享 Skill 投影。"""
     scope = _BackendScope.from_sources(context, error_context="runtime context")
@@ -117,9 +150,12 @@ def create_agent_composite_backend(context) -> CompositeBackend:
     """按已准备的 Agent context 构造本 Run 独享的 CompositeBackend 实例。
 
     DeepAgents 0.7 移除了 backend factory：每次 graph 构造时基于 context 创建
-    具体实例，并由 filesystem 与 summary middleware 共用同一实例，保持
-    user/thread/file_thread 的隔离边界。
+    具体实例。工作区 Agent 使用沙箱；纯知识库 Agent 使用 checkpointed state，
+    让 summary 仍可安全落盘而无需物化 Docker runtime。
     """
+    if not context_requires_workspace_runtime(context):
+        return CompositeBackend(default=StateBackend(), routes={}, artifacts_root="/outputs")
+
     return _BackendScope.from_sources(context, error_context="agent context").create_backend()
 
 
