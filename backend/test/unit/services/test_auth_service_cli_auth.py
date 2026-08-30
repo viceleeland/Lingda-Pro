@@ -52,6 +52,7 @@ async def test_cli_auth_session_pending_then_exchange(session):
 
     assert device_code.startswith("yxcli_")
     assert auth_session.user_code
+    assert auth_session.key_name == "灵答 CLI"
 
     with pytest.raises(CLIAuthError) as pending:
         await exchange_cli_auth_token(db, device_code)

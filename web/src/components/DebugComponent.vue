@@ -621,7 +621,7 @@
           <a-input
             v-model:value="state.modalStorageKey"
             :disabled="state.storageModalMode === 'view' || state.storageModalMode === 'edit'"
-            placeholder="例如: theme / yuxi_custom_config"
+            placeholder="例如: theme / custom_config"
           />
         </div>
 
@@ -896,7 +896,7 @@ function downloadLogs() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `yuxi-api-log-${dayjs().format('YYYYMMDD_HHmmss')}.log`
+  a.download = `lingda-api-log-${dayjs().format('YYYYMMDD_HHmmss')}.log`
   a.click()
   URL.revokeObjectURL(url)
 }

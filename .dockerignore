@@ -2,6 +2,17 @@
 .git
 .gitignore
 
+# 本地运行凭据不得进入远端或 legacy builder 的构建上下文
+.env
+.env.*
+!.env.template
+api-.txt
+**/api-.txt
+*.secret*
+**/*.secret*
+*.nogit*
+**/*.nogit*
+
 # macOS AppleDouble 元数据文件；它们可能携带不可读取的 xattr，不能进入 Docker 构建上下文
 ._*
 **/._*

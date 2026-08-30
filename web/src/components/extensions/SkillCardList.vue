@@ -304,11 +304,11 @@
                     </a-button>
                   </div>
                   <div class="repo-hint-text">
-                    支持 `owner/repo` 或 GitHub URL。可前往
+                    支持 `owner/repo` 或代码仓库 URL。可前往
                     <a href="https://skills.sh/" target="_blank" rel="noopener noreferrer"
                       >skills.sh</a
                     >
-                    查询开源 skills。 也支持 ModelScope 单个 Skill
+                    查询公共 Skills。也支持 ModelScope 单个 Skill
                     地址，每次仅限安装一个：`https://modelscope.cn/skills/&lt;skill-id&gt;`。 Skill
                     ID 可在
                     <a href="https://modelscope.cn/skills" target="_blank" rel="noopener noreferrer"
@@ -404,7 +404,7 @@
                     </a-button>
                   </div>
                   <div class="repo-hint-text">
-                    直接输入关键字检索 skills.sh 上的开源 Skills 并批量拉取安装。
+                    直接输入关键字检索 skills.sh 上的公共 Skills，并批量拉取安装。
                   </div>
 
                   <!-- 搜索结果列表 -->
@@ -530,7 +530,7 @@ const RECOMMENDED_SUITES = [
     name: 'MiniMax 办公文档套件',
     provider: 'MiniMax-AI',
     description:
-      'MiniMax 开源的办公文档 Skills 合集，覆盖 DOCX、PDF、XLSX 与 PPTX 演示文稿的创建与格式化。',
+      'MiniMax 提供的办公文档 Skills 合集，覆盖 DOCX、PDF、XLSX 与 PPTX 演示文稿的创建与格式化。',
     source: 'https://modelscope.cn/collections/MiniMax/MiniMax-Office-skills',
     skills: [
       {
@@ -574,12 +574,12 @@ const RECOMMENDED_SUITES = [
         slug: 'find-skills',
         name: 'find-skills',
         source: 'https://modelscope.cn/skills/@vercel-labs/find-skills',
-        description: '协助智能体根据用户需求检索并发现可安装的开源 Agent Skills，动态扩展自身能力。'
+        description: '协助智能体根据用户需求检索并发现可安装的 Agent Skills，动态扩展自身能力。'
       },
       {
         slug: 'self-improving-agent',
         name: 'self-improving-agent',
-        source: 'https://github.com/zhaono1/agent-playbook',
+        source: 'zhaono1/agent-playbook',
         description: '通用自我进化技能，基于多重记忆架构从经验与错误中持续学习并自我迭代。'
       }
     ]

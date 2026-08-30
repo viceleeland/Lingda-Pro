@@ -47,7 +47,7 @@ async def discovery():
     """系统能力发现接口（公开接口）"""
     knowledge_enabled = knowledge_capability_enabled()
     return {
-        "name": "Yuxi",
+        "name": "灵答",
         "version": get_version(),
         "api_prefix": "/api",
         "capabilities": {

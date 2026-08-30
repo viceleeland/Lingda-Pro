@@ -20,7 +20,7 @@ def test_discovery_endpoint_is_public(monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["name"] == "Yuxi"
+    assert payload["name"] == "灵答"
     assert payload["version"] == "0.7.1.dev0"
     assert payload["api_prefix"] == "/api"
     assert payload["capabilities"]["features"]["knowledge"] is True

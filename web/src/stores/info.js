@@ -1,6 +1,12 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { brandApi } from '@/apis/system_api'
+import {
+  APP_BRAND_ICON,
+  APP_BRAND_NAME,
+  APP_COPYRIGHT,
+  normalizeBrandText
+} from '@/utils/branding'
 
 function readDebugMode() {
   try {
@@ -19,33 +25,40 @@ export const useInfoStore = defineStore('info', () => {
   const showDebugModal = ref(false)
 
   // 计算属性 - 组织信息
-  const organization = computed(
-    () =>
-      infoConfig.value.organization || {
-        name: '',
-        logo: '',
-        avatar: ''
-      }
-  )
+  const organization = computed(() => {
+    const source = infoConfig.value.organization || {}
+    return {
+      ...source,
+      name: normalizeBrandText(source.name) || APP_BRAND_NAME,
+      logo: APP_BRAND_ICON,
+      avatar: APP_BRAND_ICON
+    }
+  })
 
   // 计算属性 - 品牌信息
-  const branding = computed(
-    () =>
-      infoConfig.value.branding || {
-        name: '',
-        title: '',
-        subtitle: '',
-        subtitles: []
-      }
-  )
+  const branding = computed(() => {
+    const source = infoConfig.value.branding || {}
+    return {
+      ...source,
+      name: normalizeBrandText(source.name) || APP_BRAND_NAME,
+      title: normalizeBrandText(source.title),
+      subtitle: normalizeBrandText(source.subtitle),
+      subtitles: Array.isArray(source.subtitles)
+        ? source.subtitles.map(normalizeBrandText).filter(Boolean)
+        : []
+    }
+  })
 
   // 计算属性 - 页脚信息
-  const footer = computed(() => ({
-    copyright: '',
-    user_agreement_url: '',
-    privacy_policy_url: '',
-    ...(infoConfig.value.footer || {})
-  }))
+  const footer = computed(() => {
+    const source = infoConfig.value.footer || {}
+    return {
+      user_agreement_url: '',
+      privacy_policy_url: '',
+      ...source,
+      copyright: APP_COPYRIGHT
+    }
+  })
 
   // 动作方法
   function setInfoConfig(newConfig) {

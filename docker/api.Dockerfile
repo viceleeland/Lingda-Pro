@@ -20,27 +20,26 @@ RUN npm config set registry https://registry.npmmirror.com --global \
     && npm cache clean --force
 
 # 设置代理和时区，更换镜像源，安装系统依赖 - 合并为一个RUN减少层数
-RUN set -ex \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked set -ex \
+    && rm -f /etc/apt/apt.conf.d/docker-clean \
     # (A) 设置时区
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     # (B) 替换清华源 (针对 Debian Bookworm 的新版格式)
     && sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources \
     && sed -i 's|security.debian.org/debian-security|mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list.d/debian.sources \
     # (C) 安装必要的系统库
-    && apt-get update \
-    && apt-get install -y --no-install-recommends --fix-missing \
-        curl \
-        ffmpeg \
-        fonts-liberation \
-        fonts-noto-cjk \
-        git \
-        libpq5 \
-        libsm6 \
-        libxext6 \
-        libreoffice-impress-nogui \
-        libreoffice-writer-nogui \
-    # (D) 清理垃圾，减小体积
-    && apt-get clean \
+    && packages="curl ffmpeg fonts-liberation fonts-noto-cjk git libpq5 libsm6 libxext6 libreoffice-impress-nogui libreoffice-writer-nogui" \
+    && if ! ( \
+        apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=10 -o Acquire::http::Timeout=120 update \
+        && apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 install -y --no-install-recommends --fix-missing $packages \
+    ); then \
+        echo "Tsinghua apt mirror failed; retrying with Debian's official mirror" >&2; \
+        sed -i 's|http://mirrors.tuna.tsinghua.edu.cn/debian-security|https://deb.debian.org/debian-security|g' /etc/apt/sources.list.d/debian.sources; \
+        sed -i 's|http://mirrors.tuna.tsinghua.edu.cn/debian|https://deb.debian.org/debian|g' /etc/apt/sources.list.d/debian.sources; \
+        apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=10 -o Acquire::https::Timeout=120 update; \
+        apt-get -o Acquire::Retries=10 -o Acquire::https::Timeout=120 install -y --no-install-recommends --fix-missing $packages; \
+    fi \
+    # (D) 索引不进入镜像层；下载包保留在 BuildKit cache mount 中供后续构建复用
     && rm -rf /var/lib/apt/lists/*
 
 # 复制项目配置文件
@@ -52,7 +51,8 @@ COPY backend/uv.lock /app/uv.lock
 COPY backend/package /app/package
 
 # 如果网络还是不好，可以在后面添加 --index-url https://pypi.tuna.tsinghua.edu.cn/simple
-RUN uv sync --no-cache --group test --no-dev --frozen
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    UV_HTTP_TIMEOUT=120 UV_LINK_MODE=copy uv sync --group test --no-dev --frozen
 
 # 复制 server 代码
 COPY backend/server /app/server
@@ -62,6 +62,7 @@ RUN groupadd --gid 1000 yuxi \
     && useradd --uid 1000 --gid 1000 --create-home yuxi \
     && mkdir -p /app/runtime /home/yuxi/nltk_data /home/yuxi/.cache/rapidocr/models \
     && chown -R 1000:1000 /app/runtime /home/yuxi \
+    && sed -i 's/\r$//' /usr/local/bin/yuxi-entrypoint \
     && chmod 0755 /usr/local/bin/yuxi-entrypoint
 
 ENV HOME=/home/yuxi \

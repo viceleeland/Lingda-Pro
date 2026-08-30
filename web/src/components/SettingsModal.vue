@@ -84,38 +84,6 @@
           </div>
         </div>
 
-        <div v-if="showStarCard" class="settings-star-card">
-          <div class="star-card-header">
-            <div class="star-card-badge">
-              <Star :size="12" />
-              <span>支持项目</span>
-            </div>
-            <button
-              class="star-card-close lucide-icon-btn"
-              @click="dismissStarCard"
-              aria-label="关闭 Star 提示"
-            >
-              <X :size="14" />
-            </button>
-          </div>
-          <p class="star-card-title">给 Yuxi 点个 Star</p>
-          <p class="star-card-description">
-            如果这个项目帮到了你，欢迎去 GitHub 点亮一个 Star，让更多人看到它。
-          </p>
-          <a
-            class="star-card-link"
-            :href="projectRepoUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <img
-              class="star-card-link-image"
-              src="https://img.shields.io/github/stars/xerrors/Yuxi?label=Yuxi&style=social"
-              alt="GitHub stars for Yuxi"
-            />
-            <ExternalLink :size="13" />
-          </a>
-        </div>
       </div>
 
       <!-- 顶部导航 (Mobile) -->
@@ -215,15 +183,13 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useUserStore } from '@/stores/user'
 import {
   CircleUser,
-  ExternalLink,
   Settings,
   Key,
   ScanText,
-  Star,
   SquareTerminal,
   User,
   Users,
@@ -252,10 +218,6 @@ const emit = defineEmits(['update:visible', 'close'])
 
 const userStore = useUserStore()
 const activeTab = ref('account')
-const showStarCard = ref(true)
-
-const STAR_CARD_STORAGE_KEY = 'yuxi-settings-star-card-dismissed'
-const projectRepoUrl = 'https://github.com/xerrors/Yuxi'
 
 const visible = computed({
   get: () => props.visible,
@@ -281,15 +243,6 @@ const setActiveTab = (preferredTab) => {
 const handleClose = () => {
   emit('close')
 }
-
-const dismissStarCard = () => {
-  showStarCard.value = false
-  localStorage.setItem(STAR_CARD_STORAGE_KEY, 'true')
-}
-
-onMounted(() => {
-  showStarCard.value = localStorage.getItem(STAR_CARD_STORAGE_KEY) !== 'true'
-})
 
 watch(
   () => [props.visible, props.initialTab],
@@ -401,87 +354,6 @@ watch(
     }
   }
 
-  .settings-star-card {
-    width: 100%;
-    margin-top: auto;
-    padding: 14px 12px 12px;
-    border-radius: 12px;
-    border: 1px solid rgba(4, 106, 130, 0.12);
-    background:
-      radial-gradient(circle at top right, rgba(95, 174, 194, 0.18), transparent 48%),
-      linear-gradient(180deg, var(--main-5) 0%, var(--gray-0) 100%);
-    overflow: hidden;
-  }
-
-  .star-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .star-card-badge {
-    width: fit-content;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: rgba(4, 106, 130, 0.08);
-    color: var(--main-700);
-    font-size: 12px;
-    font-weight: 600;
-    line-height: 1;
-  }
-
-  .star-card-close {
-    width: 24px;
-    height: 24px;
-    border: none;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.72);
-    color: var(--gray-600);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    flex-shrink: 0;
-
-    &:hover {
-      background: var(--gray-0);
-      color: var(--gray-900);
-    }
-  }
-
-  .star-card-title {
-    margin: 10px 0 6px;
-    color: var(--gray-900);
-    font-size: 15px;
-    font-weight: 600;
-    line-height: 1.35;
-  }
-
-  .star-card-description {
-    margin: 0;
-    color: var(--gray-600);
-    font-size: 12px;
-    line-height: 1.5;
-  }
-
-  .star-card-link {
-    margin-top: 12px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 6px;
-    text-decoration: none;
-    color: var(--gray-600);
-  }
-
-  .star-card-link-image {
-    display: block;
-    height: 20px;
-  }
 }
 
 /* Content Area */

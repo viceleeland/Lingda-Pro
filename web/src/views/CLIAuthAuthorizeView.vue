@@ -2,7 +2,7 @@
   <main class="cli-auth-view">
     <section class="cli-auth-panel">
       <div class="cli-auth-header">
-        <p class="eyebrow">Yuxi CLI</p>
+        <p class="eyebrow">灵答 CLI</p>
         <h1>确认命令行登录</h1>
       </div>
 
@@ -29,7 +29,7 @@
           <dl>
             <div>
               <dt>凭据名称</dt>
-              <dd>{{ session?.key_name || 'Yuxi CLI' }}</dd>
+              <dd>{{ session?.key_name || '灵答 CLI' }}</dd>
             </div>
             <div>
               <dt>状态</dt>

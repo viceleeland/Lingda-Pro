@@ -83,3 +83,7 @@ docs/vibe
 .taskr/
 .workbuddy/
 web/src/utils/__tests__/
+.gstack/
+
+# Local provider credentials (never commit)
+api-.txt

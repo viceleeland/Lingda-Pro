@@ -23,7 +23,7 @@
               mode="tags"
               :aria-label="field.label"
               :token-separators="[',', ' ', '\n']"
-              placeholder="输入域名后按回车，例如 github.com"
+              placeholder="输入域名后按回车，例如 modelscope.cn"
               :options="[]"
             />
             <div class="edit-footer">
