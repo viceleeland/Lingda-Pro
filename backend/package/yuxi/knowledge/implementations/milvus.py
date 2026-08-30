@@ -46,6 +46,21 @@ _milvus_query_offload_semaphore_refs: dict[
 ] = {}
 
 
+def _sanitize_chunks_for_storage(chunks: list[dict], *, file_id: str | None = None) -> int:
+    """移除 PostgreSQL 文本字段禁止的 NUL，并保持向量库与关系库内容一致。"""
+
+    removed_count = 0
+    for chunk in chunks:
+        content = chunk.get("content")
+        if not isinstance(content, str) or "\x00" not in content:
+            continue
+        removed_count += content.count("\x00")
+        chunk["content"] = content.replace("\x00", "")
+    if removed_count and file_id:
+        logger.warning(f"Removed {removed_count} NUL characters from chunks for file {file_id}")
+    return removed_count
+
+
 def _get_milvus_query_offload_semaphore() -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
     loop_id = id(loop)
@@ -730,6 +745,7 @@ class MilvusKB(KnowledgeBase):
 
             # Split
             chunks = self._split_text_into_chunks(markdown_content, file_id, filename, params)
+            _sanitize_chunks_for_storage(chunks, file_id=file_id)
             logger.info(
                 f"Split {filename} into {len(chunks)} chunks with params: "
                 f"chunk_preset_id={params.get('chunk_preset_id')}, "
@@ -850,6 +866,7 @@ class MilvusKB(KnowledgeBase):
 
                 # 重新生成 chunks
                 chunks = self._split_text_into_chunks(markdown_content, file_id, filename, resolved_params)
+                _sanitize_chunks_for_storage(chunks, file_id=file_id)
                 logger.info(f"Split {filename} into {len(chunks)} chunks")
                 chunk_stats = self._calculate_chunk_stats(chunks)
 

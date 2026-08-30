@@ -8,6 +8,7 @@ import base64
 import io
 import os
 import re
+import ssl
 import time
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,39 @@ from pypdf import PdfReader
 from yuxi.knowledge.parser.base import BaseDocumentProcessor, DocumentParserException
 from yuxi.knowledge.parser.pdf_visual import format_pdf_page_markdown, is_visual_page
 from yuxi.utils import logger
+
+
+_TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_MAX_HTTP_ATTEMPTS = 2
+_RETRY_BACKOFF_SECONDS = 1.0
+_MAX_RETRY_AFTER_SECONDS = 15.0
+
+
+def _is_retryable_request_error(error: requests.RequestException) -> bool:
+    """仅识别适合安全重试一次的瞬时网络错误。"""
+
+    if isinstance(error, requests.exceptions.SSLError):
+        error_text = str(error).upper()
+        return isinstance(error.__cause__, ssl.SSLEOFError) or "UNEXPECTED_EOF_WHILE_READING" in error_text
+    return isinstance(
+        error,
+        (
+            requests.exceptions.ConnectTimeout,
+            requests.exceptions.ReadTimeout,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ConnectionError,
+        ),
+    )
+
+
+def _retry_delay_seconds(response: requests.Response | None = None) -> float:
+    if response is not None and response.status_code in {429, 503}:
+        retry_after = (getattr(response, "headers", None) or {}).get("Retry-After")
+        try:
+            return min(max(float(retry_after), 0.0), _MAX_RETRY_AFTER_SECONDS)
+        except (TypeError, ValueError):
+            pass
+    return _RETRY_BACKOFF_SECONDS
 
 
 class DeepSeekOCRParser(BaseDocumentProcessor):
@@ -183,10 +217,8 @@ class DeepSeekOCRParser(BaseDocumentProcessor):
         }
         payload.update(self.request_body_overrides)
 
-        response = requests.post(
-            self.api_url,
-            headers=self.headers,
-            json=payload,
+        response = self._post_with_transient_retry(
+            payload,
             timeout=int(params.get("timeout_seconds", 120)),
         )
 
@@ -204,6 +236,45 @@ class DeepSeekOCRParser(BaseDocumentProcessor):
         # content = re.sub(r"<\|.*?\|>", "", content)
 
         return content.strip()
+
+    def _post_with_transient_retry(self, payload: dict[str, Any], *, timeout: int) -> requests.Response:
+        """在单页请求边界对瞬时失败重试一次，避免重跑整本文档。"""
+
+        for attempt in range(1, _MAX_HTTP_ATTEMPTS + 1):
+            try:
+                response = requests.post(
+                    self.api_url,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=timeout,
+                )
+            except requests.RequestException as error:
+                if attempt >= _MAX_HTTP_ATTEMPTS or not _is_retryable_request_error(error):
+                    raise DocumentParserException(
+                        f"Network request failed: {type(error).__name__}",
+                        self.get_service_name(),
+                        "network_error",
+                    ) from error
+                delay = _retry_delay_seconds()
+                logger.warning(
+                    f"{self.get_service_name()} transient network error "
+                    f"({type(error).__name__}), retrying {attempt + 1}/{_MAX_HTTP_ATTEMPTS} "
+                    f"after {delay:.1f}s"
+                )
+                time.sleep(delay)
+                continue
+
+            if response.status_code not in _TRANSIENT_HTTP_STATUS_CODES or attempt >= _MAX_HTTP_ATTEMPTS:
+                return response
+
+            delay = _retry_delay_seconds(response)
+            logger.warning(
+                f"{self.get_service_name()} transient HTTP {response.status_code}, "
+                f"retrying {attempt + 1}/{_MAX_HTTP_ATTEMPTS} after {delay:.1f}s"
+            )
+            time.sleep(delay)
+
+        raise AssertionError("unreachable")
 
     def _get_mime_type(self, file_path: str) -> str:
         file_ext = Path(file_path).suffix.lower()
