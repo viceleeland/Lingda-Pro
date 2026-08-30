@@ -316,6 +316,15 @@ def test_calculate_chunk_stats_counts_chunks_and_tokens():
     }
 
 
+def test_sanitize_chunks_for_storage_removes_nul_consistently():
+    chunks = [make_chunk(0, content="alpha\x00beta"), make_chunk(1, content="中文\x00\x00内容")]
+
+    removed_count = milvus_module._sanitize_chunks_for_storage(chunks)
+
+    assert removed_count == 3
+    assert [chunk["content"] for chunk in chunks] == ["alphabeta", "中文内容"]
+
+
 async def test_index_file_persists_chunk_stats(monkeypatch):
     kb = MilvusKB.__new__(MilvusKB)
     file_repo = FakeKnowledgeFileRepository({"file-1": make_file_record()})
@@ -740,6 +749,8 @@ async def test_update_content_uses_streaming_chunk_store(monkeypatch):
     parse_params = []
     saved_markdown = []
     cleaned_markdown = []
+    split_chunks = [make_chunk(0), make_chunk(1)]
+    split_chunks[0]["content"] = "clean\x00content"
 
     async def get_collection(kb_id, embedding_model_spec):
         del kb_id, embedding_model_spec
@@ -767,7 +778,7 @@ async def test_update_content_uses_streaming_chunk_store(monkeypatch):
 
     kb._get_or_create_milvus_collection = get_collection
     kb._get_embedding_function = lambda embedding_model_spec: forbidden_embedding
-    kb._split_text_into_chunks = lambda text, file_id, filename, params: [make_chunk(0), make_chunk(1)]
+    kb._split_text_into_chunks = lambda text, file_id, filename, params: split_chunks
     kb.delete_file_chunks_only = delete_file_chunks_only
     kb._embed_and_store_chunks = embed_and_store_chunks
     kb._save_markdown_to_minio = save_markdown
@@ -790,6 +801,7 @@ async def test_update_content_uses_streaming_chunk_store(monkeypatch):
     assert len(store_calls) == 1
     assert store_calls[0][2] is collection
     assert [chunk["chunk_id"] for chunk in store_calls[0][3]] == ["chunk-0", "chunk-1"]
+    assert store_calls[0][3][0]["content"] == "cleancontent"
     assert store_calls[0][4] is forbidden_embedding
     assert parse_params[0]["image_prefix"] == "db/kb-images/file-1"
     assert saved_markdown == [("db", "file-1", "# markdown")]

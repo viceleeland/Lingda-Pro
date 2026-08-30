@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ssl
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+import requests
 import yuxi.knowledge.parser.factory as factory_module
 import yuxi.knowledge.parser.unified as parser_unified
 from docx import Document
@@ -770,6 +772,90 @@ def test_deepseek_vision_uses_official_multimodal_payload(monkeypatch: pytest.Mo
     prompt = captured["json"]["messages"][0]["content"][1]["text"]
     assert "<image>" not in prompt
     assert "visual description" in prompt
+
+
+def test_deepseek_vision_retries_ssl_eof_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    parser = DeepSeekVisionParser(api_key="test-key")
+    calls = []
+    sleeps = []
+
+    class Response:
+        status_code = 200
+        text = ""
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {"content": "recovered"}}]}
+
+    outcomes = iter(
+        [
+            requests.exceptions.SSLError(
+                ssl.SSLEOFError(8, "[SSL: UNEXPECTED_EOF_WHILE_READING] unexpected eof")
+            ),
+            Response(),
+        ]
+    )
+
+    def _post(*args, **kwargs):
+        calls.append((args, kwargs))
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr("yuxi.knowledge.parser.deepseek_ocr.requests.post", _post)
+    monkeypatch.setattr("yuxi.knowledge.parser.deepseek_ocr.time.sleep", sleeps.append)
+
+    result = parser._call_api(b"image", "image/png", {})
+
+    assert result == "recovered"
+    assert len(calls) == 2
+    assert calls[0][1]["json"] == calls[1][1]["json"]
+    assert sleeps == [1.0]
+
+
+def test_deepseek_vision_does_not_retry_certificate_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    parser = DeepSeekVisionParser(api_key="test-key")
+    calls = []
+    sleeps = []
+
+    def _post(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise requests.exceptions.SSLError(ssl.SSLCertVerificationError(1, "certificate verify failed"))
+
+    monkeypatch.setattr("yuxi.knowledge.parser.deepseek_ocr.requests.post", _post)
+    monkeypatch.setattr("yuxi.knowledge.parser.deepseek_ocr.time.sleep", sleeps.append)
+
+    with pytest.raises(DocumentParserException) as exc_info:
+        parser._call_api(b"image", "image/png", {})
+
+    assert exc_info.value.status_code == "network_error"
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_deepseek_vision_caps_retry_after_for_transient_http_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    parser = DeepSeekVisionParser(api_key="test-key")
+    sleeps = []
+
+    class Response:
+        text = ""
+
+        def __init__(self, status_code, headers=None):
+            self.status_code = status_code
+            self.headers = headers or {}
+
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {"content": "recovered"}}]}
+
+    outcomes = iter([Response(429, {"Retry-After": "120"}), Response(200)])
+    monkeypatch.setattr("yuxi.knowledge.parser.deepseek_ocr.requests.post", lambda *args, **kwargs: next(outcomes))
+    monkeypatch.setattr("yuxi.knowledge.parser.deepseek_ocr.time.sleep", sleeps.append)
+
+    assert parser._call_api(b"image", "image/png", {}) == "recovered"
+    assert sleeps == [15.0]
 
 
 def test_deepseek_vision_parse_binds_page_image_to_same_page_description(
