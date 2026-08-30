@@ -136,7 +136,7 @@ Yuxi 把知识进入系统、Agent 执行任务和团队治理放在一条完整
 - 支持配置 Embedding 与 Rerank 算法，并在后台直接进行多路召回测试与调优。
 - 内置 RAG 效果评估工具，通过实际问答集量化测试知识库检索与回答质量。
 
-![Yuxi 知识库管理](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260825155645273.png)
+![image-20260830144756161](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260830144756161.png)
 
 <details>
 <summary><strong>展开详细截图：入库、检索与评估</strong></summary>
@@ -157,17 +157,21 @@ Yuxi 把知识进入系统、Agent 执行任务和团队治理放在一条完整
 
 提供直观的检索测试工作台。输入测试 Query 即可实时查看 Embedding 向量初筛得分、混合检索结果以及 Rerank 重排序后的分数变化，方便直观验证召回效果。
 
-![image-20260826195905986](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260826195905986.png)
+![image-20260830144827319](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260830144827319.png)
 
 **RAG 效果评估**
 
 支持构建专属的基准问答评估集，自动批量运行评测并输出检索召回率、答案相关性等量化指标，帮助快速发现知识盲区与配置短板。
 
-![image-20260826195947474](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260826195947474.png)
+![image-20260830144852289](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260830144852289.png)
 
 自动生成单条 QA 和多跳 QA
 
 ![image-20260826200055381](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260826200055381.png)
+
+![image-20260830144919806](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260830144919806.png)
+
+![image-20260830144950126](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260830144950126.png)
 
 </details>
 
@@ -179,7 +183,7 @@ Yuxi 把知识进入系统、Agent 执行任务和团队治理放在一条完整
 - 支持按关键词搜索实体、点击节点查看属性详情，并高亮探索关联子图。
 - 结合知识库文件元数据自动生成多层级知识导图，快速纵览业务领域全景。
 
-![Yuxi 知识图谱与节点详情](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260825151056752.png)
+![image-20260830145027082](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260830145027082.png)
 
 <details>
 <summary><strong>展开详细截图：图谱构建、节点关系与知识导图</strong></summary>
@@ -190,17 +194,11 @@ Yuxi 把知识进入系统、Agent 执行任务和团队治理放在一条完整
 
 ![image-20260826200519930](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260826200519930.png)
 
-**节点详情与关联子图**
-
-在可视化的力导向图谱中，点击任意实体节点即可在侧边栏查看其完整属性、标签与来源文件，并高亮展开多跳关联的邻接子图，辅助复杂逻辑推理。
-
-![image-20260826200654754](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260826200654754.png)
-
 **知识导图**
 
 基于文件的目录结构、分类标签与元数据特征，自动生成结构化的主题脑图/知识导图，方便用户以树状脉络快速浏览海量知识内容。
 
-![image-20260826200742397](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260826200742397.png)
+![image-20260830145125067](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260830145125067.png)
 
 </details>
 
@@ -231,11 +229,19 @@ Yuxi 把知识进入系统、Agent 执行任务和团队治理放在一条完整
 
 **Skills、MCP 与生态扩展**
 
-统一接入并管理 Skills 扩展技能与 MCP Servers 外部协议，支持针对不同角色分配权限与使用范围；借助渐进式披露机制，在真正需要时按需动态解析并加载工具。
+统一接入并管理 Skills 扩展技能与 MCP Servers 外部协议，支持针对不同角色分配权限与使用范围；借助渐进式披露机制，在真正需要时按需动态解析并加载工具。Skill 在线安装支持 skills.sh 以及魔搭社区的 skill。
 
-![Skills](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260825151310647.png)
+![image-20260830145227399](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260830145227399.png)
 
-![Skill 管理](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260825153934215.png)
+可以查看并在线编辑 skill
+
+![image-20260830145217595](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260830145217595.png)
+
+可以配置 skill 权限和依赖
+
+![image-20260830145359700](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260830145359700.png)
+
+内置工具列表
 
 ![内置工具](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260826201207239.png)
 
@@ -337,7 +343,5 @@ Yuxi 的实现和文档参考了以下优秀的开源项目：
 ## 许可证
 
 Yuxi 本体采用 MIT License，详见 [LICENSE](LICENSE)。Docker Compose 引入的第三方组件遵循各自的许可证；再分发和商业部署前，请按实际镜像版本核对上游许可和源码义务，相关边界见[生产部署指南](docs/advanced/deployment.md)。
-
-[![Star History Chart](https://star-history.dera.page/svg?repos=xerrors/Yuxi)](https://star-history.dera.page/#xerrors/Yuxi)
 
 [![给 Yuxi 一个 Star](https://xerrors.oss-cn-shanghai.aliyuncs.com/posts/2026/08/20260818-184409-image-da91658b.png)](https://github.com/xerrors/Yuxi)
