@@ -1,201 +1,117 @@
 <div align="center">
-<h1>Yuxi</h1>
 
-<p><strong>A self-hosted, multi-tenant knowledge agent platform</strong><br/>Bring RAG, knowledge graphs, and multi-agent execution into one workspace</p>
+<img src="web/public/favicon.svg" width="72" height="72" alt="Lingda-Pro" />
 
-[![](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=ffffff)](https://github.com/xerrors/Yuxi/blob/main/docker-compose.yml)
-[![](https://img.shields.io/github/issues/xerrors/Yuxi?color=F48D73)](https://github.com/xerrors/Yuxi/issues)
-[![License](https://img.shields.io/github/license/xerrors/Yuxi.svg?logo=github)](https://github.com/xerrors/Yuxi/blob/main/LICENSE)
-[![DeepWiki](https://img.shields.io/badge/DeepWiki-blue.svg)](https://deepwiki.com/xerrors/Yuxi)
-[![zread](https://img.shields.io/badge/Ask_Zread-_.svg?style=flat&color=00b0aa&labelColor=000000&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTQuOTYxNTYgMS42MDAxSDIuMjQxNTZDMS44ODgxIDEuNjAwMSAxLjYwMTU2IDEuODg2NjQgMS42MDE1NiAyLjI0MDFWNC45NjAxQzEuNjAxNTYgNS4zMTM1NiAxLjg4ODEgNS42MDAxIDIuMjQxNTYgNS42MDAxSDQuOTYxNTZDNS4zMTUwMiA1LjYwMDEgNS42MDE1NiA1LjMxMzU2IDUuNjAxNTYgNC45NjAxVjIuMjQwMUM1LjYwMTU2IDEuODg2NjQgNS4zMTUwMiAxLjYwMDEgNC45NjE1NiAxLjYwMDFaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00Ljk2MTU2IDEwLjM5OTlIMi4yNDE1NkMxLjg4ODEgMTAuMzk5OSAxLjYwMTU2IDEwLjY4NjQgMS42MDE1NiAxMS4wMzk5VjEzLjc1OTlDMS42MDE1NiAxNC4xMTM0IDEuODg4MSAxNC4zOTk5IDIuMjQxNTYgMTQuMzk5OUg0Ljk2MTU2QzUuMzE1MDIgMTQuMzk5OSA1LjYwMTU2IDE0LjExMzQgNS42MDE1NiAxMy43NTk5VjExLjAzOTlDNS42MDE1NiAxMC42ODY0IDUuMzE1MDIgMTAuMzk5OSA0Ljk2MTU2IDEwLjM5OTlaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik0xMy43NTg0IDEuNjAwMUgxMS4wMzg0QzEwLjY4NSAxLjYwMDEgMTAuMzk4NCAxLjg4NjY0IDEwLjM5ODQgMi4yNDAxVjQuOTYwMUMxMC4zOTg0IDUuMzEzNTYgMTAuNjg1IDUuNjAwMSAxMS4wMzg0IDUuNjAwMUgxMy43NTg0QzE0LjExMTkgNS42MDAxIDE0LjM5ODQgNS4zMTM1NiAxNC4zOTg0IDQuOTYwMVYyLjI0MDFDMTQuMzk4NCAxLjg4NjY0IDE0LjExMTkgMS42MDAxIDEzLjc1ODQgMS42MDAxWiIgZmlsbD0iI2ZmZiIvPgo8cGF0aCBkPSJNNCAxMkwxMiA0TDQgMTJaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00IDEyTDEyIDQiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K&logoColor=ffffff)](https://zread.ai/xerrors/Yuxi)
-[![demo](https://img.shields.io/badge/demo-00A1D6.svg?style=flat&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1TZEx6NEit/)
+# Lingda-Pro
 
-<a href="https://trendshift.io/repositories/24335" target="_blank"><img src="https://trendshift.io/api/badge/repositories/24335" alt="xerrors%2FYuxi | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+**Knowledge retrieval and agent collaboration for professional documents**
 
-[[Project home]](https://xerrors.github.io/Yuxi/) · [[Quick start]](https://xerrors.github.io/Yuxi/intro/quick-start) · [[Demo]](https://www.bilibili.com/video/BV1TZEx6NEit/) · [[Releases]](https://github.com/xerrors/Yuxi/releases) · [[中文]](README.md)
+PDF text and figures · Traceable sources · Multi-step tasks · Self-hosted deployment
+
+[Quick start](#quick-start) · [Capabilities](#capabilities) · [Architecture](ARCHITECTURE.md) · [中文](README.md)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-0F766E)](LICENSE)
+[![Deploy: Docker Compose](https://img.shields.io/badge/Deploy-Docker_Compose-2496ED)](docker-compose.yml)
 
 </div>
-
-![Yuxi: a self-hosted, multi-tenant knowledge agent platform](https://xerrors.oss-cn-shanghai.aliyuncs.com/posts/2026/08/20260818-151118-mac-1787037059154-8c08f48c.png)
-
-## Introduction
-
-Yuxi is a **self-hosted, multi-tenant knowledge agent platform**. Rather than stopping at a chat interface, it brings **RAG retrieval, Milvus-backed knowledge graphs, LangGraph multi-agent orchestration, MCP/Skills, sandbox tools, and access control** into one workspace.
-
-Administrators connect model providers, build knowledge bases, and manage user or department permissions. Users work with agents that can retrieve cited sources, reason over graph context, call tools and sub-agents, and deliver previewable, downloadable artifacts.
-
-Navigation: [Introduction](https://xerrors.github.io/Yuxi/) ｜ [Quick Start](https://xerrors.github.io/Yuxi/intro/quick-start) ｜ [Roadmap](https://xerrors.github.io/Yuxi/develop-guides/roadmap); for the latest updates, see the [changelog](https://xerrors.github.io/Yuxi/develop-guides/changelog).
-
-## Core Features
-
-- 🤖 **Agent development** — Built on LangGraph, with sub-agents (SubAgents), Skills, MCPs, Tools, and middleware; long-running tasks run asynchronously on a background worker, backed by a sandbox file system for persisting, previewing, and downloading tool artifacts.
-- 📚 **Knowledge base (RAG)** — Multi-format document parsing (MinerU / PaddleX / OCR), configurable Embedding and Rerank models, knowledge base evaluation, in-app PDF / image preview, and retrieval sources backfilled as chat citations.
-- 🕸️ **Knowledge graph** — Build, visualize, and retrieve entity-relation graphs inside Milvus knowledge bases, then fuse graph hits with chunk retrieval for agent reasoning.
-- 🏢 **Multi-tenancy & permissions** — User / department-level access control, unified model provider configuration, and API Key authentication for external system integration.
-- ⚙️ **Platform & engineering** — Vue + FastAPI architecture, ready-to-run Docker Compose deployment, dark mode, a lightweight LITE startup mode, and production-grade orchestration.
-
-## When Yuxi Fits
-
-Yuxi is a strong fit for teams that need private deployment, organizational access control, multiple knowledge sources, and extensible agents that can execute work. If you only need a minimal single-document chat UI or a fully managed SaaS with no infrastructure to operate, Yuxi may be more platform than you need.
-
-## Tech Stack
-
-| Layer | Technologies |
-| --- | --- |
-| Frontend | Vue 3 · Vite · Pinia |
-| Backend | FastAPI · LangGraph · ARQ (async worker) |
-| Storage | PostgreSQL · Redis · MinIO · Milvus · Neo4j |
-| Doc parsing | MinerU · PaddleX · RapidOCR |
-| Deployment | Docker Compose |
-
-
-![image-20260606190609377](https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260606190609377.png)
-
-## Quick Start
-
-**Prerequisites**: [Docker](https://docs.docker.com/get-docker/) and Docker Compose installed, plus at least one OpenAI-compatible LLM API.
-
-**1. Clone and initialize**
-
-```bash
-git clone --branch v0.7.2.beta2 --depth 1 https://github.com/xerrors/Yuxi.git
-cd Yuxi
-
-# Linux/macOS
-./scripts/init.sh
-
-# Windows PowerShell
-.\scripts\init.ps1
-```
-
-**2. Start with Docker**
-
-```bash
-docker compose up --build
-```
-
-Do not run `up` directly when upgrading an existing installation to the v0.7.2
-storage layout. The single owning procedure is the
-[production deployment guide](docs/advanced/deployment.md).
-
-**3. Open the platform**
-
-Once the services are ready, open `http://localhost:5173` in your browser and follow the first-run page to create the initial superadmin account.
-
-> 💡 If you don't need heavy dependencies like knowledge bases / graphs, run `make up-lite` for a lightweight LITE mode with faster cold starts. See the [docs](https://xerrors.github.io/Yuxi) for more deployment details.
-
-## Examples and Demo
-
-<table>
-  <tr>
-    <td align="center">
-      <img src="https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260326125852369.png" width="100%" alt="Home"/>
-      <br/>
-      <strong>Home</strong>
-    </td>
-    <td align="center">
-      <img src="https://github.com/user-attachments/assets/d3e4fe09-fa48-4686-93ea-2c50300ade21" width="100%" alt="Dashboard statistics"/>
-      <br/>
-      <strong>Dashboard Statistics</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260326130528866.png" width="100%" alt="Agent configuration"/>
-      <br/>
-      <strong>Agent Configuration</strong>
-    </td>
-    <td align="center">
-      <img src="https://github.com/user-attachments/assets/06d56525-69bf-463a-8360-286b2cf8796f" width="100%" alt="Knowledge base invocation"/>
-      <br/>
-      <strong>Knowledge Base Invocation</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="https://github.com/user-attachments/assets/0548d89c-15a3-47cf-ba87-1b544f7dd749" width="100%" alt="Create knowledge base"/>
-      <br/>
-      <strong>Create Knowledge Base</strong>
-    </td>
-    <td align="center">
-      <img src="https://github.com/user-attachments/assets/21396d04-376b-4e9a-8139-eec8c3cc915a" width="100%" alt="Knowledge base management"/>
-      <br/>
-      <strong>Knowledge Base Management</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="https://github.com/user-attachments/assets/fc46a14b-16fb-47ea-84a0-148a451f3012" width="100%" alt="Knowledge graph"/>
-      <br/>
-      <strong>Knowledge Graph Visualization</strong>
-    </td>
-    <td align="center">
-      <img src="https://github.com/user-attachments/assets/d8b3de51-2854-455b-956f-2ae2d8d5f677" width="100%" alt="Project docs"/>
-      <br/>
-      <strong>Project Documentation</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="https://xerrors.oss-cn-shanghai.aliyuncs.com/github/image-20260326130404306.png" width="100%" alt="Skills management"/>
-      <br/>
-      <strong>Extension Management (Skills)</strong>
-    </td>
-    <td align="center">
-      <img src="https://github.com/user-attachments/assets/9305d7a4-663b-4e5d-a252-211d6caa019b" width="100%" alt="MCPs management"/>
-      <br/>
-      <strong>Extension Management (MCPs)</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="https://github.com/user-attachments/assets/13bd22ea-ddde-4262-8c29-69fb948bce44" width="100%" alt="User and department permissions"/>
-      <br/>
-      <strong>User / Department Permission Management</strong>
-    </td>
-    <td align="center">
-      <img src="https://github.com/user-attachments/assets/cc886b04-719e-4abd-807d-e9955080003d" width="100%" alt="Model provider configuration"/>
-      <br/>
-      <strong>Model Provider Configuration</strong>
-    </td>
-  </tr>
-</table>
-
-## Acknowledgements
-
-Yuxi references and builds on the following excellent open-source projects:
-
-- [LightRAG](https://github.com/HKUDS/LightRAG) - Inspired parts of the early graph construction and retrieval design. Yuxi now uses its own Milvus-backed knowledge-base and graph pipeline.
-- [DeepAgents](https://github.com/langchain-ai/deepagents) - Used as the deep agent framework.
-- [DeerFlow](https://github.com/bytedance/deer-flow) - Referenced for Sandbox agent architecture ideas.
-- [RAGFlow](https://github.com/infiniflow/ragflow) - Referenced for document text chunking strategies.
-- [LangGraph](https://github.com/langchain-ai/langgraph) - Multi-agent orchestration framework and the core architectural foundation of this project.
-- [QwenPaw](https://github.com/agentscope-ai/QwenPaw) - Referenced for model configuration and personal file area design.
-
-## Contributing
-
-Thanks to all contributors for supporting this project!
-
-<a href="https://github.com/xerrors/Yuxi/contributors">
-  <img src="https://contrib.rocks/image?repo=xerrors/Yuxi&max=100&columns=10" />
-</a>
-
-## Star History
-
-[![Star History Chart](https://star-history.dera.page/svg?repos=xerrors/Yuxi)](https://star-history.dera.page/#xerrors/Yuxi)
-
-[![Give Yuxi a Star](https://xerrors.oss-cn-shanghai.aliyuncs.com/posts/2026/08/20260818-184409-image-da91658b.png)](https://github.com/xerrors/Yuxi)
-
-## 📄 License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
-
-Third-party components brought in by Docker Compose (Neo4j Community GPL-3.0, MinIO AGPL-3.0, etc.) retain their original licenses; see the [deployment guide](docs/advanced/deployment.md) for deployment and redistribution boundaries.
 
 ---
 
-<div align="center">
+Lingda-Pro brings document ingestion, knowledge retrieval, agent execution and file management into one workspace. It is designed for working with technical manuals, research materials and internal documentation: ask questions, inspect source text and figures, and use tools and skills to complete follow-up tasks.
 
-**If this project helps you, please give us a ⭐️.**
+The current upgrade focuses on **PDF page-image retrieval, long-document ingestion reliability and agent execution**. Teams can host the platform themselves, configure model APIs and manage access by user and department.
 
-</div>
+## Capabilities
+
+| Capability | What it provides |
+|---|---|
+| PDF text and figures | Associate page numbers, captions and text with selected page images |
+| Knowledge bases and RAG | Parsing, chunking, vector and keyword retrieval, reranking and citations |
+| Agent execution | Models, tools, Skills, MCP and sub-agents for multi-step tasks |
+| Workspace and artifacts | File management, previews, downloads and continued work on generated files |
+| Knowledge graphs | Entity-relation exploration alongside document retrieval |
+| Team management | User and department permissions, model providers and runtime information |
+
+### PDF retrieval with source pages
+
+The optional page-preservation pipeline retains images for pages detected through figure/table captions or embedded raster images. Plain-text pages retain their text. A configured vision model can add searchable descriptions; page images remain protected by knowledge-base access controls.
+
+Retrieval uses text, captions and optional visual descriptions to return associated page images. This is not native image-to-image vector search, and detection may miss untitled vector figures. See the [implementation and limitations](docs/develop-guides/decisions/implemented/2026-08-30-multimodal-pdf-page-retrieval.md).
+
+### From questions to deliverables
+
+Use `@` in chat to reference knowledge bases, files or skills. Agents can retrieve evidence, call tools and coordinate sub-tasks. The interface displays execution state and tool results, requests configured approvals, and provides previews and downloads for generated artifacts. Citations support verification; they do not guarantee a correct answer.
+
+## Technology
+
+| Layer | Components |
+|---|---|
+| Frontend | Vue 3, Vite, Ant Design Vue |
+| API and agents | FastAPI, LangGraph, Skills, MCP |
+| Background execution | ARQ worker, Redis |
+| Business and file storage | PostgreSQL, MinIO |
+| Retrieval and graphs | Milvus, Neo4j |
+| Document processing | PDF parsing, OCR and optional vision models |
+| Deployment | Docker Compose |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for module boundaries and execution flow.
+
+## Quick start
+
+Install Docker and Docker Compose, and prepare model API credentials. Knowledge retrieval requires an embedding model; OCR and vision integrations require their own configuration.
+
+### 1. Clone the upgrade branch
+
+```bash
+git clone --branch feat/multimodal-pdf-retrieval https://github.com/viceleeland/Lingda-Pro.git
+cd Lingda-Pro
+```
+
+The current default branch is `feat/multimodal-pdf-retrieval`. Historical tags preserve earlier versions and may not include the upgrade changes.
+
+### 2. Initialize
+
+Linux / macOS:
+
+```bash
+./scripts/init.sh
+```
+
+Windows PowerShell:
+
+```powershell
+.\scripts\init.ps1
+```
+
+Follow the prompts to create `.env`, generate security secrets and configure models. Refer to [.env.template](.env.template) for configuration keys. Do not commit credentials or runtime data.
+
+### 3. Start
+
+```bash
+docker compose up --build -d
+docker compose ps
+```
+
+Check [readiness](http://localhost:5050/api/system/ready). When `status` is `ready`, open:
+
+- **Application:** [http://localhost:5173](http://localhost:5173)
+- **API documentation:** [http://localhost:5050/docs](http://localhost:5050/docs)
+
+Create the initial administrator through the first-run screen. Hardware requirements, external dependencies and model charges depend on configuration. Existing installations must follow the [deployment and upgrade guide](docs/advanced/deployment.md).
+
+## Documentation and feedback
+
+The implementation guides are currently in Chinese.
+
+- [Model configuration](docs/intro/model-config.md)
+- [Knowledge bases](docs/intro/knowledge-base.md)
+- [Agent configuration](docs/agents/agents-config.md)
+- [Knowledge-base operations](docs/advanced/knowledge-base-operations.md)
+- [Deployment](docs/advanced/deployment.md)
+- [Report an issue](https://github.com/viceleeland/Lingda-Pro/issues)
+
+## Acknowledgments and license
+
+Thanks to [Yuxi](https://github.com/xerrors/Yuxi) and its community for the foundational work, and to projects including LangGraph, Vue, FastAPI and Milvus.
+
+This repository uses the [MIT License](LICENSE) and retains existing copyright and license notices. Third-party components retain their respective licenses.
